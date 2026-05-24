@@ -3,6 +3,7 @@ package grpc
 import (
 	"fmt"
 	"strconv"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 
@@ -91,7 +92,7 @@ func toSide(side pb.Side) types.SideType {
 	}
 
 	log.Warnf("unexpected side type: %v", side)
-	return types.SideTypeBuy
+	return ""
 }
 
 func toSubmitOrders(pbOrders []*pb.SubmitOrder) (submitOrders []types.SubmitOrder) {
@@ -233,5 +234,93 @@ func transKLineResponse(session *bbgo.ExchangeSession, kline types.KLine) *pb.Ma
 		Event:        pb.Event_UPDATE,
 		Kline:        transKLine(session, kline),
 		SubscribedAt: 0,
+	}
+}
+
+// --- Reverse conversions: pb → types (used by gRPC client stream) ---
+
+func pbKLineToTypes(k *pb.KLine) types.KLine {
+	return types.KLine{
+		Exchange:    types.ExchangeName(k.Exchange),
+		Symbol:      k.Symbol,
+		Open:        fixedpoint.MustNewFromString(k.Open),
+		High:        fixedpoint.MustNewFromString(k.High),
+		Low:         fixedpoint.MustNewFromString(k.Low),
+		Close:       fixedpoint.MustNewFromString(k.Close),
+		Volume:      fixedpoint.MustNewFromString(k.Volume),
+		QuoteVolume: fixedpoint.MustNewFromString(k.QuoteVolume),
+		StartTime:   types.Time(time.UnixMilli(k.StartTime)),
+		EndTime:     types.Time(time.UnixMilli(k.EndTime)),
+		Closed:      k.Closed,
+	}
+}
+
+func pbTradeToTypes(t *pb.Trade) types.Trade {
+	id, err := strconv.ParseUint(t.Id, 10, 64)
+		if err != nil {
+			log.WithError(err).Warnf("invalid trade id: %s", t.Id)
+		}
+	return types.Trade{
+		Exchange:     types.ExchangeName(t.Exchange),
+		Symbol:       t.Symbol,
+		ID:           id,
+		Price:        fixedpoint.MustNewFromString(t.Price),
+		Quantity:     fixedpoint.MustNewFromString(t.Quantity),
+		Time:         types.Time(time.UnixMilli(t.CreatedAt)),
+		Side:         pbSideToTypes(t.Side),
+		FeeCurrency:  t.FeeCurrency,
+		Fee:          fixedpoint.MustNewFromString(t.Fee),
+		IsMaker:      t.Maker,
+	}
+}
+
+func pbSideToTypes(s pb.Side) types.SideType {
+	switch s {
+	case pb.Side_BUY:
+		return types.SideTypeBuy
+	case pb.Side_SELL:
+		return types.SideTypeSell
+	}
+	return types.SideTypeBuy
+}
+
+func pbDepthToBook(d *pb.Depth) types.SliceOrderBook {
+	book := types.SliceOrderBook{
+		Symbol: d.Symbol,
+	}
+	for _, pv := range d.Asks {
+		book.Asks = append(book.Asks, types.PriceVolume{
+			Price:  fixedpoint.MustNewFromString(pv.Price),
+			Volume: fixedpoint.MustNewFromString(pv.Volume),
+		})
+	}
+	for _, pv := range d.Bids {
+		book.Bids = append(book.Bids, types.PriceVolume{
+			Price:  fixedpoint.MustNewFromString(pv.Price),
+			Volume: fixedpoint.MustNewFromString(pv.Volume),
+		})
+	}
+	return book
+}
+
+func pbSubscriptionToTypes(sub *pb.Subscription) types.Subscription {
+	var channel types.Channel
+	switch sub.Channel {
+	case pb.Channel_TRADE:
+		channel = types.MarketTradeChannel
+	case pb.Channel_BOOK:
+		channel = types.BookChannel
+	case pb.Channel_KLINE:
+		channel = types.KLineChannel
+	case pb.Channel_TICKER:
+		channel = types.BookTickerChannel
+	}
+	return types.Subscription{
+		Symbol:  sub.Symbol,
+		Channel: channel,
+		Options: types.SubscribeOptions{
+			Depth:    types.Depth(sub.Depth),
+			Interval: types.Interval(sub.Interval),
+		},
 	}
 }

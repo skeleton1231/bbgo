@@ -7,6 +7,9 @@ option go_package = "../pb";
 service MarketDataService {
   rpc Subscribe(SubscribeRequest) returns (stream MarketData) {}
   rpc QueryKLines(QueryKLinesRequest) returns (QueryKLinesResponse) {}
+  rpc QueryTicker(QueryTickerRequest) returns (QueryTickerResponse) {}
+  rpc QueryTickers(QueryTickersRequest) returns (QueryTickersResponse) {}
+  rpc QueryMarkets(QueryMarketsRequest) returns (QueryMarketsResponse) {}
 }
 
 service UserDataService {
@@ -277,4 +280,34 @@ message KLine {
   int64 start_time = 10;
   int64 end_time = 11;
   bool closed = 12;
+}
+
+message QueryMarketsRequest {
+  string exchange = 1;
+}
+
+message QueryMarketsResponse {
+  string exchange = 1;
+  string markets_json = 2;
+  Error error = 3;
+}
+
+message QueryTickerRequest {
+  string exchange = 1;
+  string symbol = 2;
+}
+
+message QueryTickerResponse {
+  Ticker ticker = 1;
+  Error error = 2;
+}
+
+message QueryTickersRequest {
+  string exchange = 1;
+  repeated string symbols = 2;
+}
+
+message QueryTickersResponse {
+  repeated Ticker tickers = 1;
+  Error error = 2;
 }

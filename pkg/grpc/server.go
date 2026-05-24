@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/pkg/errors"
@@ -193,7 +194,24 @@ type MarketDataService struct {
 	Environ *bbgo.Environment
 	Trader  *bbgo.Trader
 
+	broadcasters map[string]*SharedBroadcaster
+	bcMu         sync.Mutex
+
 	pb.UnimplementedMarketDataServiceServer
+}
+
+func (s *MarketDataService) getOrCreateBroadcaster(session *bbgo.ExchangeSession) *SharedBroadcaster {
+	s.bcMu.Lock()
+	defer s.bcMu.Unlock()
+	if s.broadcasters == nil {
+		s.broadcasters = make(map[string]*SharedBroadcaster)
+	}
+	if bc, ok := s.broadcasters[session.Name]; ok {
+		return bc
+	}
+	bc := NewSharedBroadcaster(session)
+	s.broadcasters[session.Name] = bc
+	return bc
 }
 
 func (s *MarketDataService) Subscribe(request *pb.SubscribeRequest, server pb.MarketDataService_SubscribeServer) error {
@@ -203,65 +221,45 @@ func (s *MarketDataService) Subscribe(request *pb.SubscribeRequest, server pb.Ma
 		if !ok {
 			return fmt.Errorf("exchange %s not found", sub.Exchange)
 		}
-
 		ss, err := toSubscriptions(sub)
 		if err != nil {
 			return err
 		}
-
 		exchangeSubscriptions[session.Name] = append(exchangeSubscriptions[session.Name], ss)
 	}
 
-	streamPool := map[string]types.Stream{}
+	type clientReg struct {
+		bc *SharedBroadcaster
+		id uint64
+	}
+	var regs []clientReg
+
 	for sessionName, subs := range exchangeSubscriptions {
 		session, ok := s.Environ.Session(sessionName)
 		if !ok {
 			log.Errorf("session %s not found", sessionName)
 			continue
 		}
+		bc := s.getOrCreateBroadcaster(session)
+		id, ch := bc.RegisterClient()
+		regs = append(regs, clientReg{bc: bc, id: id})
 
-		stream := session.Exchange.NewStream()
-		stream.SetPublicOnly()
-		for _, sub := range subs {
-			log.Infof("%s subscribe %s %s %+v", sessionName, sub.Channel, sub.Symbol, sub.Options)
-			stream.Subscribe(sub.Channel, sub.Symbol, sub.Options)
-		}
+		bc.AddSubscriptions(subs)
+		log.Infof("shared broadcaster: client %d subscribed to %s (%d subs)", id, sessionName, len(subs))
 
-		stream.OnMarketTrade(func(trade types.Trade) {
-			if err := server.Send(transMarketTrade(session, trade)); err != nil {
-				log.WithError(err).Error("grpc stream send error")
+		go func() {
+			for msg := range ch {
+				if err := server.Send(msg); err != nil {
+					log.WithError(err).Error("grpc stream send error")
+					return
+				}
 			}
-		})
-
-		stream.OnBookSnapshot(func(book types.SliceOrderBook) {
-			if err := server.Send(transBook(session, book, pb.Event_SNAPSHOT)); err != nil {
-				log.WithError(err).Error("grpc stream send error")
-			}
-		})
-
-		stream.OnBookUpdate(func(book types.SliceOrderBook) {
-			if err := server.Send(transBook(session, book, pb.Event_UPDATE)); err != nil {
-				log.WithError(err).Error("grpc stream send error")
-			}
-		})
-		stream.OnKLineClosed(func(kline types.KLine) {
-			err := server.Send(transKLineResponse(session, kline))
-			if err != nil {
-				log.WithError(err).Error("grpc stream send error")
-			}
-		})
-		streamPool[sessionName] = stream
-	}
-
-	for _, stream := range streamPool {
-		go stream.Connect(server.Context())
+		}()
 	}
 
 	defer func() {
-		for _, stream := range streamPool {
-			if err := stream.Close(); err != nil {
-				log.WithError(err).Errorf("market data stream close error")
-			}
+		for _, r := range regs {
+			r.bc.UnregisterClient(r.id)
 		}
 	}()
 
@@ -312,6 +310,66 @@ func (s *MarketDataService) QueryKLines(ctx context.Context, request *pb.QueryKL
 	}
 
 	return nil, nil
+}
+
+func (s *MarketDataService) QueryTicker(ctx context.Context, request *pb.QueryTickerRequest) (*pb.QueryTickerResponse, error) {
+	exchangeName, err := types.ValidExchangeName(request.Exchange)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, session := range s.Environ.Sessions() {
+		if session.ExchangeName == exchangeName {
+			ticker, err := session.Exchange.QueryTicker(ctx, request.Symbol)
+			if err != nil {
+				return nil, err
+			}
+			return &pb.QueryTickerResponse{
+				Ticker: &pb.Ticker{
+					Exchange: request.Exchange,
+					Symbol:   request.Symbol,
+					Open:     ticker.Open.Float64(),
+					High:     ticker.High.Float64(),
+					Low:      ticker.Low.Float64(),
+					Close:    ticker.Last.Float64(),
+					Volume:   ticker.Volume.Float64(),
+				},
+			}, nil
+		}
+	}
+
+	return nil, fmt.Errorf("exchange %s not found", request.Exchange)
+}
+
+func (s *MarketDataService) QueryTickers(ctx context.Context, request *pb.QueryTickersRequest) (*pb.QueryTickersResponse, error) {
+	exchangeName, err := types.ValidExchangeName(request.Exchange)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, session := range s.Environ.Sessions() {
+		if session.ExchangeName == exchangeName {
+			tickers, err := session.Exchange.QueryTickers(ctx, request.Symbols...)
+			if err != nil {
+				return nil, err
+			}
+			resp := &pb.QueryTickersResponse{}
+			for symbol, t := range tickers {
+				resp.Tickers = append(resp.Tickers, &pb.Ticker{
+					Exchange: request.Exchange,
+					Symbol:   symbol,
+					Open:     t.Open.Float64(),
+					High:     t.High.Float64(),
+					Low:      t.Low.Float64(),
+					Close:    t.Last.Float64(),
+					Volume:   t.Volume.Float64(),
+				})
+			}
+			return resp, nil
+		}
+	}
+
+	return nil, fmt.Errorf("exchange %s not found", request.Exchange)
 }
 
 type Server struct {

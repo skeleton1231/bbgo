@@ -128,7 +128,8 @@ type Environment struct {
 	loggingConfig     *LoggingConfig
 	environmentConfig *EnvironmentConfig
 
-	sessions map[string]*ExchangeSession
+	sessions          map[string]*ExchangeSession
+	marketDataSource MarketDataSource
 }
 
 func NewEnvironment() *Environment {
@@ -140,6 +141,21 @@ func NewEnvironment() *Environment {
 		startTime:     now,
 
 		syncStatus: SyncNotStarted,
+	}
+}
+
+func (environ *Environment) InitMarketDataSource() {
+	if addr := os.Getenv("MARKET_DATA_SERVICE_URL"); addr != "" {
+		source, err := NewSharedServiceSource(addr)
+		if err != nil {
+			log.WithError(err).Warn("shared data service unavailable, falling back to direct exchange")
+			environ.marketDataSource = &DirectExchangeSource{}
+		} else {
+			log.Infof("using shared market data service: %s", addr)
+			environ.marketDataSource = source
+		}
+	} else {
+		environ.marketDataSource = &DirectExchangeSource{}
 	}
 }
 

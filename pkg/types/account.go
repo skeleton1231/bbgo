@@ -1,6 +1,7 @@
 package types
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
 	"sync"
@@ -348,4 +349,29 @@ func (a *Account) Print(log LogFunc) {
 	}
 
 	a.balances.Print(log)
+}
+
+type futuresPositionMapEntry struct {
+	Key   PositionKey      `json:"key"`
+	Value FuturesPosition  `json:"value"`
+}
+
+func (m FuturesPositionMap) MarshalJSON() ([]byte, error) {
+	entries := make([]futuresPositionMapEntry, 0, len(m))
+	for k, v := range m {
+		entries = append(entries, futuresPositionMapEntry{Key: k, Value: v})
+	}
+	type alias FuturesPositionMap
+	return json.Marshal(entries)
+}
+
+func (m FuturesPositionMap) UnmarshalJSON(data []byte) error {
+	var entries []futuresPositionMapEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return err
+	}
+	for _, e := range entries {
+		m[e.Key] = e.Value
+	}
+	return nil
 }

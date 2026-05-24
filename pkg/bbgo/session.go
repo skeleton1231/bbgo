@@ -17,7 +17,6 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/c9s/bbgo/pkg/cache"
-	"github.com/c9s/bbgo/pkg/envvar"
 	"github.com/c9s/bbgo/pkg/exchange/retry"
 	"github.com/c9s/bbgo/pkg/metrics"
 	"github.com/c9s/bbgo/pkg/pricesolver"
@@ -462,27 +461,29 @@ func (session *ExchangeSession) Init(ctx context.Context, environ *Environment) 
 	// load markets first
 	logger.Infof("querying market info from %s...", session.Name)
 
-	var disableMarketsCache = false
 	var markets types.MarketMap
 	var err error
-	if envvar.SetBool("DISABLE_MARKETS_CACHE", &disableMarketsCache); disableMarketsCache {
-		markets, err = session.Exchange.QueryMarkets(ctx)
-		if err != nil {
-			return err
-		}
+	if environ.marketDataSource != nil {
+		markets, err = environ.marketDataSource.LoadMarkets(ctx, session)
 	} else {
 		markets, err = cache.LoadExchangeMarketsWithCache(ctx, session.Exchange)
-		if err != nil {
-			return err
-		}
 	}
-
+	if err != nil {
+		return err
+	}
 	if len(markets) == 0 {
 		return ErrEmptyMarketInfo
 	}
 
 	logger.Infof("%d markets loaded", len(markets))
 	session.SetMarkets(markets)
+
+	if ds, ok := environ.marketDataSource.(*SharedServiceSource); ok {
+		session.Exchange = newGRPCExchangeProxy(session.Exchange, ds.Conn(), string(session.ExchangeName))
+		newStream := ds.NewMarketDataStream(session)
+		session.MarketDataConnectivity.Bind(newStream)
+		session.MarketDataStream = newStream
+	}
 
 	// re-allocate the priceSolver
 	session.priceSolver = pricesolver.NewSimplePriceResolver(markets)
