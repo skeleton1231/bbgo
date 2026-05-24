@@ -5,3 +5,7 @@
 /desktop
 /data
 /output
+
+saas/web/node_modules
+saas/web/.next
+**/node_modules

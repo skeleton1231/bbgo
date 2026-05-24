@@ -37,7 +37,6 @@ type Strategy struct {
 	Symbol      string `json:"symbol"`
 	Market      types.Market
 	Interval    types.Interval   `json:"interval"`
-	Quantity    fixedpoint.Value `json:"quantity"`
 
 	// persistence fields
 	Position    *types.Position    `json:"position,omitempty" persistence:"position"`

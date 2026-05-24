@@ -1531,7 +1531,7 @@ func (s *Strategy) Run(ctx context.Context, _ bbgo.OrderExecutor, session *bbgo.
 	s.hedgeSimulator.SetSpread(fixedpoint.NewFromFloat(0.01 * 0.01))  // 0.01% spread
 	s.hedgeService = s.hedgeSimulator
 
-	if s.HedgeInterval.Duration() > 0 {
+	if s.HedgeInterval != "" && s.HedgeInterval.Duration() > 0 {
 		if err := s.hedgeSimulator.LoadKLines("data/binance/futures"); err != nil {
 			s.logger.WithError(err).Error("failed to load klines for hedge simulator")
 			return err
