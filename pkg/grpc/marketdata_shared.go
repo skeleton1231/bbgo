@@ -12,8 +12,10 @@ import (
 )
 
 type subKey struct {
-	channel string
-	symbol  string
+	channel  string
+	symbol   string
+	interval string
+	depth    string
 }
 
 // SharedBroadcaster maintains a single shared exchange WebSocket stream
@@ -63,7 +65,12 @@ func (b *SharedBroadcaster) AddSubscriptions(subs []types.Subscription) {
 	b.mu.Lock()
 	changed := false
 	for _, sub := range subs {
-		key := subKey{channel: string(sub.Channel), symbol: sub.Symbol}
+		key := subKey{
+			channel:  string(sub.Channel),
+			symbol:   sub.Symbol,
+			interval: string(sub.Options.Interval),
+			depth:    string(sub.Options.Depth),
+		}
 		if !b.subs[key] {
 			b.subs[key] = true
 			changed = true
@@ -83,7 +90,10 @@ func (b *SharedBroadcaster) ensureStream() {
 		stream := b.session.Exchange.NewStream()
 		stream.SetPublicOnly()
 		for key := range b.subs {
-			stream.Subscribe(types.Channel(key.channel), key.symbol, types.SubscribeOptions{})
+			stream.Subscribe(types.Channel(key.channel), key.symbol, types.SubscribeOptions{
+				Interval: types.Interval(key.interval),
+				Depth:    types.Depth(key.depth),
+			})
 		}
 		b.bindCallbacks(stream)
 		b.stream = stream
@@ -91,9 +101,16 @@ func (b *SharedBroadcaster) ensureStream() {
 			ctx := context.Background()
 			if err := stream.Connect(ctx); err != nil {
 				log.WithError(err).Error("shared stream connect failed")
+				b.mu.Lock()
+				b.started = false
+				b.stream = nil
+				b.mu.Unlock()
+				return
 			}
+			b.mu.Lock()
+			b.started = true
+			b.mu.Unlock()
 		}()
-		b.started = true
 		return
 	}
 
@@ -113,6 +130,10 @@ func (b *SharedBroadcaster) ensureStream() {
 					all = append(all, types.Subscription{
 						Channel: types.Channel(key.channel),
 						Symbol:  key.symbol,
+						Options: types.SubscribeOptions{
+							Interval: types.Interval(key.interval),
+							Depth:    types.Depth(key.depth),
+						},
 					})
 				}
 			}
