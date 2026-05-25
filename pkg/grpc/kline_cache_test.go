@@ -225,7 +225,14 @@ func TestSQLiteWriteBack(t *testing.T) {
 }
 
 func TestKLineTableName(t *testing.T) {
-	assert.Equal(t, "binance_klines", klineTableName("binance"))
-	assert.Equal(t, "okex_klines", klineTableName("okex"))
-	assert.Equal(t, "max_klines", klineTableName("max"))
+	name, err := klineTableName("binance")
+	assert.NoError(t, err)
+	assert.Equal(t, "binance_klines", name)
+
+	name, err = klineTableName("okex")
+	assert.NoError(t, err)
+	assert.Equal(t, "okex_klines", name)
+
+	_, err = klineTableName("bi'; DROP TABLE--")
+	assert.Error(t, err)
 }

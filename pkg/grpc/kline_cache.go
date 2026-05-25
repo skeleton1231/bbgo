@@ -3,6 +3,7 @@ package grpc
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +14,8 @@ import (
 	"github.com/c9s/bbgo/pkg/types"
 	"github.com/jmoiron/sqlx"
 )
+
+var validTableName = regexp.MustCompile(`^[a-z][a-z0-9]*_klines$`)
 
 type klineCacheKey struct {
 	exchange string
@@ -62,8 +65,12 @@ func klineTTL(interval string) time.Duration {
 	}
 }
 
-func klineTableName(exchange string) string {
-	return strings.ToLower(exchange) + "_klines"
+func klineTableName(exchange string) (string, error) {
+	name := strings.ToLower(exchange) + "_klines"
+	if !validTableName.MatchString(name) {
+		return "", fmt.Errorf("invalid table name derived from exchange %q", exchange)
+	}
+	return name, nil
 }
 
 func (c *KLineCache) getMemory(key klineCacheKey) ([]*pb.KLine, bool) {
@@ -89,6 +96,8 @@ func (c *KLineCache) setMemory(key klineCacheKey, klines []*pb.KLine, ttl time.D
 	c.entries[key] = &klineCacheEntry{klines: cp, expiresAt: time.Now().Add(ttl)}
 }
 
+const maxDuration time.Duration = 1<<63 - 1
+
 func (c *KLineCache) evictLocked() {
 	now := time.Now()
 	for k, e := range c.entries {
@@ -98,7 +107,7 @@ func (c *KLineCache) evictLocked() {
 		}
 	}
 	var oldest klineCacheKey
-	oldestTime := time.Now().Add(1 << 62)
+	oldestTime := now.Add(maxDuration)
 	for k, e := range c.entries {
 		if e.expiresAt.Before(oldestTime) {
 			oldestTime = e.expiresAt
@@ -112,7 +121,10 @@ func (c *KLineCache) querySQLite(ctx context.Context, exchange, symbol, interval
 	if c.db == nil {
 		return nil, nil
 	}
-	tableName := klineTableName(exchange)
+	tableName, err := klineTableName(exchange)
+	if err != nil {
+		return nil, nil
+	}
 	query := fmt.Sprintf(
 		"SELECT * FROM `%s` WHERE `exchange` = ? AND `symbol` = ? AND `interval` = ? AND `end_time` >= ? AND `start_time` <= ? ORDER BY `start_time` ASC LIMIT ?",
 		tableName,
@@ -142,12 +154,15 @@ func (c *KLineCache) writeSQLite(ctx context.Context, exchange string, klines []
 	if c.db == nil || len(klines) == 0 {
 		return nil
 	}
-	tableName := klineTableName(exchange)
+	tableName, err := klineTableName(exchange)
+	if err != nil {
+		return nil
+	}
 	sql := fmt.Sprintf(
 		"INSERT OR IGNORE INTO `%s` (`exchange`, `start_time`, `end_time`, `symbol`, `interval`, `open`, `high`, `low`, `close`, `closed`, `volume`, `quote_volume`, `taker_buy_base_volume`, `taker_buy_quote_volume`) VALUES (:exchange, :start_time, :end_time, :symbol, :interval, :open, :high, :low, :close, :closed, :volume, :quote_volume, :taker_buy_base_volume, :taker_buy_quote_volume)",
 		tableName,
 	)
-	_, err := c.db.NamedExecContext(ctx, sql, klines)
+	_, err = c.db.NamedExecContext(ctx, sql, klines)
 	if err != nil {
 		log.WithError(err).Warn("kline cache: failed to write back to sqlite")
 	}

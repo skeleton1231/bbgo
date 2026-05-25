@@ -296,14 +296,14 @@ func (s *MarketDataService) QueryKLines(ctx context.Context, request *pb.QueryKL
 		}
 	}
 
-	// L2: SQLite
-	startTime := time.Unix(request.StartTime, 0)
-	endTime := time.Now()
-	if request.EndTime != 0 {
-		endTime = time.Unix(request.EndTime, 0)
-	}
+	// L2: SQLite — only query when startTime is specified (needs a time range)
+	if s.cache != nil && request.StartTime != 0 {
+		startTime := time.Unix(request.StartTime, 0)
+		endTime := time.Now()
+		if request.EndTime != 0 {
+			endTime = time.Unix(request.EndTime, 0)
+		}
 
-	if s.cache != nil {
 		sqliteKlines, err := s.cache.querySQLite(ctx, request.Exchange, request.Symbol, request.Interval, startTime, endTime, int(request.Limit))
 		if err != nil {
 			log.WithError(err).Debug("kline cache sqlite miss")
@@ -317,9 +317,7 @@ func (s *MarketDataService) QueryKLines(ctx context.Context, request *pb.QueryKL
 					break
 				}
 			}
-			if s.cache != nil {
-				s.cache.setMemory(cacheKey, pbKlines, klineTTL(request.Interval))
-			}
+			s.cache.setMemory(cacheKey, pbKlines, klineTTL(request.Interval))
 			return &pb.QueryKLinesResponse{Klines: pbKlines}, nil
 		}
 	}
@@ -327,9 +325,11 @@ func (s *MarketDataService) QueryKLines(ctx context.Context, request *pb.QueryKL
 	// L3: exchange API
 	for _, session := range s.Environ.Sessions() {
 		if session.ExchangeName == exchangeName {
-			response := &pb.QueryKLinesResponse{
-				Klines: nil,
-				Error:  nil,
+			response := &pb.QueryKLinesResponse{}
+
+			endTime := time.Now()
+			if request.EndTime != 0 {
+				endTime = time.Unix(request.EndTime, 0)
 			}
 
 			options := types.KLineQueryOptions{
@@ -354,7 +354,11 @@ func (s *MarketDataService) QueryKLines(ctx context.Context, request *pb.QueryKL
 			// Write back to L1 + L2
 			if s.cache != nil {
 				s.cache.setMemory(cacheKey, response.Klines, klineTTL(request.Interval))
-				go s.cache.writeSQLite(context.Background(), request.Exchange, klines)
+				writeCtx, writeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				go func() {
+					defer writeCancel()
+					s.cache.writeSQLite(writeCtx, request.Exchange, klines)
+				}()
 			}
 
 			return response, nil
