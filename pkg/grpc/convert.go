@@ -220,7 +220,7 @@ func transKLine(session *bbgo.ExchangeSession, kline types.KLine) *pb.KLine {
 		Volume:      kline.Volume.String(),
 		QuoteVolume: kline.QuoteVolume.String(),
 		StartTime:   kline.StartTime.UnixMilli(),
-		EndTime:     kline.StartTime.UnixMilli(),
+		EndTime:     kline.EndTime.UnixMilli(),
 		Closed:      kline.Closed,
 	}
 }
