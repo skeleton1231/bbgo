@@ -82,28 +82,31 @@ func (s *TradingService) CancelOrder(ctx context.Context, request *pb.CancelOrde
 		uuidOrderID = request.OrderId
 	}
 
-	session.Exchange.CancelOrders(ctx, types.Order{
+	err = session.Exchange.CancelOrders(ctx, types.Order{
 		SubmitOrder: types.SubmitOrder{
 			ClientOrderID: request.ClientOrderId,
 		},
 		OrderID: orderID,
 		UUID:    uuidOrderID,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("cancel order %s: %w", request.OrderId, err)
+	}
 
 	resp := &pb.CancelOrderResponse{}
 	return resp, nil
 }
 
 func (s *TradingService) QueryOrder(ctx context.Context, request *pb.QueryOrderRequest) (*pb.QueryOrderResponse, error) {
-	panic("implement me")
+	return nil, fmt.Errorf("not implemented")
 }
 
 func (s *TradingService) QueryOrders(ctx context.Context, request *pb.QueryOrdersRequest) (*pb.QueryOrdersResponse, error) {
-	panic("implement me")
+	return nil, fmt.Errorf("not implemented")
 }
 
 func (s *TradingService) QueryTrades(ctx context.Context, request *pb.QueryTradesRequest) (*pb.QueryTradesResponse, error) {
-	panic("implement me")
+	return nil, fmt.Errorf("not implemented")
 }
 
 type UserDataService struct {
@@ -309,7 +312,7 @@ func (s *MarketDataService) QueryKLines(ctx context.Context, request *pb.QueryKL
 		}
 	}
 
-	return nil, nil
+	return nil, fmt.Errorf("exchange %s not found", request.Exchange)
 }
 
 func (s *MarketDataService) QueryTicker(ctx context.Context, request *pb.QueryTickerRequest) (*pb.QueryTickerResponse, error) {
