@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jmoiron/sqlx"
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
@@ -199,6 +201,7 @@ type MarketDataService struct {
 
 	broadcasters map[string]*SharedBroadcaster
 	bcMu         sync.Mutex
+	cache        *KLineCache
 
 	pb.UnimplementedMarketDataServiceServer
 }
@@ -277,6 +280,51 @@ func (s *MarketDataService) QueryKLines(ctx context.Context, request *pb.QueryKL
 		return nil, err
 	}
 
+	cacheKey := klineCacheKey{
+		exchange: request.Exchange,
+		symbol:   request.Symbol,
+		interval: request.Interval,
+		startMs:  request.StartTime,
+		endMs:    request.EndTime,
+		limit:    int32(request.Limit),
+	}
+
+	// L1: memory cache
+	if s.cache != nil {
+		if cached, ok := s.cache.getMemory(cacheKey); ok {
+			return &pb.QueryKLinesResponse{Klines: cached}, nil
+		}
+	}
+
+	// L2: SQLite
+	startTime := time.Unix(request.StartTime, 0)
+	endTime := time.Now()
+	if request.EndTime != 0 {
+		endTime = time.Unix(request.EndTime, 0)
+	}
+
+	if s.cache != nil {
+		sqliteKlines, err := s.cache.querySQLite(ctx, request.Exchange, request.Symbol, request.Interval, startTime, endTime, int(request.Limit))
+		if err != nil {
+			log.WithError(err).Debug("kline cache sqlite miss")
+		} else if len(sqliteKlines) > 0 {
+			var pbKlines []*pb.KLine
+			for _, session := range s.Environ.Sessions() {
+				if session.ExchangeName == exchangeName {
+					for _, k := range sqliteKlines {
+						pbKlines = append(pbKlines, transKLine(session, k))
+					}
+					break
+				}
+			}
+			if s.cache != nil {
+				s.cache.setMemory(cacheKey, pbKlines, klineTTL(request.Interval))
+			}
+			return &pb.QueryKLinesResponse{Klines: pbKlines}, nil
+		}
+	}
+
+	// L3: exchange API
 	for _, session := range s.Environ.Sessions() {
 		if session.ExchangeName == exchangeName {
 			response := &pb.QueryKLinesResponse{
@@ -287,16 +335,11 @@ func (s *MarketDataService) QueryKLines(ctx context.Context, request *pb.QueryKL
 			options := types.KLineQueryOptions{
 				Limit: int(request.Limit),
 			}
-
-			endTime := time.Now()
-			if request.EndTime != 0 {
-				endTime = time.Unix(request.EndTime, 0)
-			}
 			options.EndTime = &endTime
 
 			if request.StartTime != 0 {
-				startTime := time.Unix(request.StartTime, 0)
-				options.StartTime = &startTime
+				st := time.Unix(request.StartTime, 0)
+				options.StartTime = &st
 			}
 
 			klines, err := session.Exchange.QueryKLines(ctx, request.Symbol, types.Interval(request.Interval), options)
@@ -306,6 +349,12 @@ func (s *MarketDataService) QueryKLines(ctx context.Context, request *pb.QueryKL
 
 			for _, kline := range klines {
 				response.Klines = append(response.Klines, transKLine(session, kline))
+			}
+
+			// Write back to L1 + L2
+			if s.cache != nil {
+				s.cache.setMemory(cacheKey, response.Klines, klineTTL(request.Interval))
+				go s.cache.writeSQLite(context.Background(), request.Exchange, klines)
 			}
 
 			return response, nil
@@ -376,9 +425,10 @@ func (s *MarketDataService) QueryTickers(ctx context.Context, request *pb.QueryT
 }
 
 type Server struct {
-	Config  *bbgo.Config
-	Environ *bbgo.Environment
-	Trader  *bbgo.Trader
+	Config      *bbgo.Config
+	Environ     *bbgo.Environment
+	Trader      *bbgo.Trader
+	KLineDBPath string
 }
 
 func (s *Server) ListenAndServe(bind string) error {
@@ -387,11 +437,25 @@ func (s *Server) ListenAndServe(bind string) error {
 		return errors.Wrapf(err, "failed to bind network at %s", bind)
 	}
 
+	var klineCache *KLineCache
+	if s.KLineDBPath != "" {
+		db, err := sqlx.Open("sqlite3", s.KLineDBPath)
+		if err != nil {
+			log.WithError(err).Warn("kline cache: failed to open sqlite, running without disk cache")
+		} else {
+			klineCache = NewKLineCache(db)
+			log.Infof("kline cache: enabled with db=%s", s.KLineDBPath)
+		}
+	} else {
+		klineCache = NewKLineCache(nil)
+	}
+
 	var grpcServer = grpc.NewServer()
 	pb.RegisterMarketDataServiceServer(grpcServer, &MarketDataService{
 		Config:  s.Config,
 		Environ: s.Environ,
 		Trader:  s.Trader,
+		cache:   klineCache,
 	})
 
 	pb.RegisterTradingServiceServer(grpcServer, &TradingService{

@@ -194,6 +194,7 @@ func runConfig(basectx context.Context, cmd *cobra.Command, userConfig *bbgo.Con
 				Config:  userConfig,
 				Environ: environ,
 				Trader:  trader,
+				KLineDBPath: os.Getenv("KLINE_DB_PATH"),
 			}
 			if err := s.ListenAndServe(grpcBind); err != nil {
 				log.WithError(err).Errorf("grpc server bind error")
