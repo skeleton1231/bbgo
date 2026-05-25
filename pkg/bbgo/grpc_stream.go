@@ -2,16 +2,12 @@ package bbgo
 
 import (
 	"context"
-	"strconv"
 	"sync"
 	"time"
 
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
-
-	"github.com/c9s/bbgo/pkg/fixedpoint"
-
 
 	"github.com/c9s/bbgo/pkg/pb"
 	"github.com/c9s/bbgo/pkg/types"
@@ -32,18 +28,18 @@ type GRPCStream struct {
 	cancel context.CancelFunc
 
 	// callbacks — mirrors StandardStream callback slices
-	startCallbacks          []func()
-	connectCallbacks        []func()
-	disconnectCallbacks     []func()
-	authCallbacks           []func()
-	kLineCallbacks          []func(kline types.KLine)
-	kLineClosedCallbacks    []func(kline types.KLine)
-	marketTradeCallbacks    []func(trade types.Trade)
-	bookUpdateCallbacks     []func(book types.SliceOrderBook)
-	bookSnapshotCallbacks   []func(book types.SliceOrderBook)
-	bookTickerCallbacks     []func(ticker types.BookTicker)
-	orderUpdateCallbacks    []func(order types.Order)
-	tradeUpdateCallbacks    []func(trade types.Trade)
+	startCallbacks           []func()
+	connectCallbacks         []func()
+	disconnectCallbacks      []func()
+	authCallbacks            []func()
+	kLineCallbacks           []func(kline types.KLine)
+	kLineClosedCallbacks     []func(kline types.KLine)
+	marketTradeCallbacks     []func(trade types.Trade)
+	bookUpdateCallbacks      []func(book types.SliceOrderBook)
+	bookSnapshotCallbacks    []func(book types.SliceOrderBook)
+	bookTickerCallbacks      []func(ticker types.BookTicker)
+	orderUpdateCallbacks     []func(order types.Order)
+	tradeUpdateCallbacks     []func(trade types.Trade)
 	balanceSnapshotCallbacks []func(balances types.BalanceMap)
 	balanceUpdateCallbacks   []func(balances types.BalanceMap)
 }
@@ -153,7 +149,10 @@ func (s *GRPCStream) receiveLoop(stream pb.MarketDataService_SubscribeClient) {
 
 func (s *GRPCStream) reconnectLoop() {
 	for {
-		if s.ctx.Err() != nil {
+		s.mu.Lock()
+		parentCtx := s.ctx
+		s.mu.Unlock()
+		if parentCtx.Err() != nil {
 			return
 		}
 		time.Sleep(3 * time.Second)
@@ -165,7 +164,7 @@ func (s *GRPCStream) reconnectLoop() {
 			pbSubs = append(pbSubs, typesSubToPB(sub, s.exchangeName))
 		}
 
-		streamCtx, cancel := context.WithCancel(context.Background())
+		streamCtx, cancel := context.WithCancel(parentCtx)
 		client := pb.NewMarketDataServiceClient(s.conn)
 		req := &pb.SubscribeRequest{Subscriptions: pbSubs}
 		stream, err := client.Subscribe(streamCtx, req)
@@ -195,7 +194,7 @@ func (s *GRPCStream) dispatch(data *pb.MarketData) {
 		if data.Kline == nil {
 			return
 		}
-		k := pbKLineToTypes(data.Kline)
+		k := pb.PbKLineToTypes(data.Kline)
 		s.EmitKLine(k)
 		if k.Closed {
 			s.EmitKLineClosed(k)
@@ -205,14 +204,14 @@ func (s *GRPCStream) dispatch(data *pb.MarketData) {
 		if len(data.Trades) == 0 {
 			return
 		}
-		t := pbTradeToTypes(data.Trades[0])
+		t := pb.PbTradeToTypes(data.Trades[0])
 		s.EmitMarketTrade(t)
 
 	case pb.Channel_BOOK:
 		if data.Depth == nil {
 			return
 		}
-		book := pbDepthToBook(data.Depth)
+		book := pb.PbDepthToBook(data.Depth)
 		if data.Event == pb.Event_SNAPSHOT {
 			s.EmitBookSnapshot(book)
 		} else {
@@ -285,57 +284,4 @@ func typesSubToPB(sub types.Subscription, exchangeName string) *pb.Subscription 
 	}
 
 	return pbSub
-}
-
-func pbKLineToTypes(k *pb.KLine) types.KLine {
-	return types.KLine{
-		Exchange:    types.ExchangeName(k.Exchange),
-		Symbol:      k.Symbol,
-		Open:        fixedpoint.MustNewFromString(k.Open),
-		High:        fixedpoint.MustNewFromString(k.High),
-		Low:         fixedpoint.MustNewFromString(k.Low),
-		Close:       fixedpoint.MustNewFromString(k.Close),
-		Volume:      fixedpoint.MustNewFromString(k.Volume),
-		QuoteVolume: fixedpoint.MustNewFromString(k.QuoteVolume),
-		StartTime:   types.Time(time.UnixMilli(k.StartTime)),
-		EndTime:     types.Time(time.UnixMilli(k.EndTime)),
-		Closed:      k.Closed,
-	}
-}
-
-func pbTradeToTypes(t *pb.Trade) types.Trade {
-	id, err := strconv.ParseUint(t.Id, 10, 64)
-		if err != nil {
-			log.WithError(err).Warnf("invalid trade id: %s", t.Id)
-		}
-	return types.Trade{
-		Exchange:    types.ExchangeName(t.Exchange),
-		Symbol:      t.Symbol,
-		ID:          id,
-		Price:       fixedpoint.MustNewFromString(t.Price),
-		Quantity:    fixedpoint.MustNewFromString(t.Quantity),
-		Time:        types.Time(time.UnixMilli(t.CreatedAt)),
-		Side:        pbSideToTypes(t.Side),
-		FeeCurrency: t.FeeCurrency,
-		Fee:         fixedpoint.MustNewFromString(t.Fee),
-		IsMaker:     t.Maker,
-	}
-}
-
-func pbSideToTypes(s pb.Side) types.SideType {
-	if s == pb.Side_BUY {
-		return types.SideTypeBuy
-	}
-	return types.SideTypeSell
-}
-
-func pbDepthToBook(d *pb.Depth) types.SliceOrderBook {
-	book := types.SliceOrderBook{Symbol: d.Symbol}
-	for _, pv := range d.Asks {
-		book.Asks = append(book.Asks, types.PriceVolume{Price: fixedpoint.MustNewFromString(pv.Price), Volume: fixedpoint.MustNewFromString(pv.Volume)})
-	}
-	for _, pv := range d.Bids {
-		book.Bids = append(book.Bids, types.PriceVolume{Price: fixedpoint.MustNewFromString(pv.Price), Volume: fixedpoint.MustNewFromString(pv.Volume)})
-	}
-	return book
 }

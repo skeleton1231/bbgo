@@ -3,6 +3,8 @@ package bbgo
 import (
 	"context"
 
+	log "github.com/sirupsen/logrus"
+
 	"github.com/c9s/bbgo/pkg/fixedpoint"
 	"github.com/c9s/bbgo/pkg/pb"
 	"github.com/c9s/bbgo/pkg/types"
@@ -41,15 +43,17 @@ func (p *grpcExchangeProxy) QueryKLines(ctx context.Context, symbol string, inte
 
 	resp, err := p.queryClient.QueryKLines(ctx, req)
 	if err != nil {
+		log.WithError(err).Warn("grpc proxy QueryKLines failed, falling back to direct exchange")
 		return p.Exchange.QueryKLines(ctx, symbol, interval, options)
 	}
 	if resp.Error != nil {
+		log.Warnf("grpc proxy QueryKLines returned error: %s, falling back to direct exchange", resp.Error.ErrorMessage)
 		return p.Exchange.QueryKLines(ctx, symbol, interval, options)
 	}
 
 	klines := make([]types.KLine, 0, len(resp.Klines))
 	for _, k := range resp.Klines {
-		klines = append(klines, pbKLineToTypes(k))
+		klines = append(klines, pb.PbKLineToTypes(k))
 	}
 	return klines, nil
 }
@@ -60,9 +64,11 @@ func (p *grpcExchangeProxy) QueryTicker(ctx context.Context, symbol string) (*ty
 		Symbol:   symbol,
 	})
 	if err != nil {
+		log.WithError(err).Warn("grpc proxy QueryTicker failed, falling back to direct exchange")
 		return p.Exchange.QueryTicker(ctx, symbol)
 	}
 	if resp.Error != nil {
+		log.Warnf("grpc proxy QueryTicker returned error: %s, falling back to direct exchange", resp.Error.ErrorMessage)
 		return p.Exchange.QueryTicker(ctx, symbol)
 	}
 	return pbTickerToTypes(resp.Ticker), nil
@@ -74,9 +80,11 @@ func (p *grpcExchangeProxy) QueryTickers(ctx context.Context, symbol ...string) 
 		Symbols:  symbol,
 	})
 	if err != nil {
+		log.WithError(err).Warn("grpc proxy QueryTickers failed, falling back to direct exchange")
 		return p.Exchange.QueryTickers(ctx, symbol...)
 	}
 	if resp.Error != nil {
+		log.Warnf("grpc proxy QueryTickers returned error: %s, falling back to direct exchange", resp.Error.ErrorMessage)
 		return p.Exchange.QueryTickers(ctx, symbol...)
 	}
 

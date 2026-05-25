@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 BBGO is a Go-based cryptocurrency trading framework supporting 8 exchanges (Binance, OKEx, KuCoin, MAX, Bitget, Bybit, Coinbase, Bitfinex) with 40+ built-in strategies, backtesting, and a web dashboard.
 
+Module path: `github.com/c9s/bbgo`
+
 ## Build Commands
 
 ```bash
@@ -41,6 +43,8 @@ go test -race -tags dnum ./pkg/...
 ```
 
 Integration tests require exchange API credentials via env vars (e.g., `BINANCE_API_KEY`). Most unit tests run without credentials.
+
+CI also requires MySQL and Redis for full test runs (see `.github/workflows/go.yml`).
 
 ### Test Helpers (`pkg/testing/`)
 
@@ -83,8 +87,8 @@ make grpc-go            # requires protoc; install deps: make install-grpc-tools
 go generate ./pkg/exchange/max/...
 ```
 
-- **requestgen**: generates HTTP API request builders from `//go:generate requestgen` directives
-- **callbackgen**: generates `OnXxx()` callback registrations from `//go:generate callbackgen` directives
+- **requestgen**: generates HTTP API request builders from `//go:generate requestgen` directives. Found in exchange API packages and data sources.
+- **callbackgen**: generates `OnXxx()` callback registrations from `//go:generate callbackgen -type TypeName` directives. Used for event-driven types like `TradeCollector`, `ActiveOrderBook`, `GracefulShutdown`, etc. Touch the source type, then run `go generate` in that package to regenerate the `*_callbacks.go` file.
 
 ## Architecture
 
@@ -97,13 +101,22 @@ CLI (cmd/bbgo → pkg/cmd)
       → Strategies implement SingleExchangeStrategy.Run() or CrossExchangeStrategy.CrossRun()
 ```
 
+### Startup Sequence
+
+1. Load config from YAML
+2. Allocate and initialize `ExchangeSession` objects (one per exchange account)
+3. Add sessions to `Environment`
+4. `Environment` initializes `Trader`
+5. `Trader` calls strategy `Subscribe()` to register market data interests, then opens WebSocket connections
+6. `Trader` calls strategy `Run()` — strategies set up callbacks on stream/book events and start trading
+
 ### Key Packages
 
-- **`pkg/bbgo/`** — Core engine: Environment, Trader, Config, strategy registry (`bbgo.RegisterStrategy()`)
-- **`pkg/types/`** — Shared types: Exchange interface, Order, Trade, KLine, Balance
-- **`pkg/exchange/`** — Exchange adapters (REST + WebSocket); factory in `factory.go`
+- **`pkg/bbgo/`** — Core engine: Environment, Trader, Config, strategy registry (`bbgo.RegisterStrategy()`), OrderExecutor, ExchangeSession
+- **`pkg/types/`** — Shared types: Exchange interface, Order, Trade, KLine, Balance, Stream, fixedpoint
+- **`pkg/exchange/`** — Exchange adapters (REST + WebSocket); factory in `factory.go`. Each exchange has its own sub-package (e.g., `pkg/exchange/binance/`)
 - **`pkg/strategy/`** — Built-in strategies (grid2, xmaker, bollmaker, supertrend, etc.)
-- **`pkg/indicator/`** — Technical indicators (SMA, EMA, MACD, RSI, Bollinger, etc.)
+- **`pkg/indicator/`** — Technical indicators (SMA, EMA, MACD, RSI, Bollinger, etc.) with a pandas.Series-like interface
 - **`pkg/service/`** — Persistence and business logic (database, backtest, orders, trades)
 - **`pkg/core/`** — TradeCollector, order store, KLine driver
 - **`pkg/backtest/`** — Backtesting engine
@@ -111,9 +124,27 @@ CLI (cmd/bbgo → pkg/cmd)
 
 ### Key Interfaces
 
-- `types.Exchange` (`pkg/types/exchange.go`) — unified exchange interface for querying and trading
-- `bbgo.SingleExchangeStrategy` / `bbgo.CrossExchangeStrategy` — strategy contracts
+- `types.Exchange` (`pkg/types/exchange.go`) — unified exchange interface. Composes `ExchangeMinimal`, `ExchangeMarketDataService`, `ExchangeAccountService`, `ExchangeTradeService`. Mocks generated via mockgen in `pkg/types/mocks/`.
+- `bbgo.SingleExchangeStrategy` / `bbgo.CrossExchangeStrategy` — strategy contracts in `pkg/bbgo/trader.go`
+- `bbgo.OrderExecutor` — `SubmitOrders` + `CancelOrders`
 - Strategies are registered via `bbgo.RegisterStrategy()` and configured through YAML
+
+### Strategy Interface Hierarchy
+
+Strategies can implement optional interfaces for lifecycle hooks (all defined in `pkg/bbgo/trader.go`):
+
+- `ExchangeSessionSubscriber` — `Subscribe(session)` called before WebSocket connection, used to register channel subscriptions (klines, orderbook, etc.)
+- `StrategyInitializer` — `Initialize()` called before Subscribe
+- `StrategyDefaulter` — `Defaults()` sets default config values
+- `StrategyValidator` — `Validate()` validates config
+- `StrategyShutdown` — `Shutdown(ctx, wg)` for graceful cleanup
+
+### Dynamic Injection
+
+BBGO auto-injects fields into strategy structs by type before `Run()`:
+- `*bbgo.ExchangeSession` — the exchange session the strategy runs on
+- `bbgo.OrderExecutor` — for submitting/canceling orders
+- `types.Market` — injected if the strategy has a `Symbol string` field
 
 ### Configuration
 
@@ -127,10 +158,11 @@ Supports MySQL and SQLite via rockhopper migrations. Migration SQL files are in 
 
 1. Create package under `pkg/strategy/<name>/`
 2. Implement `SingleExchangeStrategy` or `CrossExchangeStrategy` interface
-3. Register with `bbgo.RegisterStrategy("<name>", &Strategy{})` in an `init()` function
-4. Add config tests similar to `pkg/bbgo/config_test.go`
-5. Use `testify` for assertions (already in go.mod)
+3. Optionally implement `ExchangeSessionSubscriber` for market data subscriptions
+4. Register with `bbgo.RegisterStrategy("<name>", &Strategy{})` in an `init()` function
+5. Add config tests similar to `pkg/bbgo/config_test.go`
+6. Use `testify` for assertions (already in go.mod)
 
 ## Build Tag Constraints
 
-Some code and tests use `//go:build dnum` or `//go:build !dnum` to conditionally compile. When adding dnum-specific code paths, mirror the build constraints in tests.
+Some code and tests use `//go:build dnum` or `//go:build !dnum` to conditionally compile between standard `float64` and high-precision `dnum` decimal math. When adding dnum-specific code paths, mirror the build constraints in tests.

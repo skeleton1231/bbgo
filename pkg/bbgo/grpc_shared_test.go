@@ -24,7 +24,7 @@ func TestPbKLineToTypes(t *testing.T) {
 		Closed:      true,
 	}
 
-	k := pbKLineToTypes(pbK)
+	k := pb.PbKLineToTypes(pbK)
 
 	assert.Equal(t, types.ExchangeName("binance"), k.Exchange)
 	assert.Equal(t, "BTCUSDT", k.Symbol)
@@ -51,7 +51,7 @@ func TestPbTradeToTypes(t *testing.T) {
 		Maker:       false,
 	}
 
-	tr := pbTradeToTypes(pbT)
+	tr := pb.PbTradeToTypes(pbT)
 
 	assert.Equal(t, types.ExchangeName("binance"), tr.Exchange)
 	assert.Equal(t, "ETHUSDT", tr.Symbol)
@@ -72,15 +72,15 @@ func TestPbTradeToTypesInvalidID(t *testing.T) {
 		Fee:      "0",
 	}
 
-	tr := pbTradeToTypes(pbT)
+	tr := pb.PbTradeToTypes(pbT)
 	assert.Equal(t, uint64(0), tr.ID)
 	assert.Equal(t, types.SideTypeSell, tr.Side)
 }
 
 func TestPbSideToTypes(t *testing.T) {
-	assert.Equal(t, types.SideTypeBuy, pbSideToTypes(pb.Side_BUY))
-	assert.Equal(t, types.SideTypeSell, pbSideToTypes(pb.Side_SELL))
-	assert.Equal(t, types.SideTypeSell, pbSideToTypes(pb.Side(99)))
+	assert.Equal(t, types.SideTypeBuy, pb.PbSideToTypes(pb.Side_BUY))
+	assert.Equal(t, types.SideTypeSell, pb.PbSideToTypes(pb.Side_SELL))
+	assert.Equal(t, types.SideTypeSell, pb.PbSideToTypes(pb.Side(99)))
 }
 
 func TestPbDepthToBook(t *testing.T) {
@@ -95,7 +95,7 @@ func TestPbDepthToBook(t *testing.T) {
 		},
 	}
 
-	book := pbDepthToBook(pbD)
+	book := pb.PbDepthToBook(pbD)
 
 	assert.Equal(t, "BTCUSDT", book.Symbol)
 	assert.Len(t, book.Asks, 2)

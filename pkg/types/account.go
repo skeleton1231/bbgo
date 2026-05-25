@@ -365,13 +365,16 @@ func (m FuturesPositionMap) MarshalJSON() ([]byte, error) {
 	return json.Marshal(entries)
 }
 
-func (m FuturesPositionMap) UnmarshalJSON(data []byte) error {
+func (m *FuturesPositionMap) UnmarshalJSON(data []byte) error {
 	var entries []futuresPositionMapEntry
 	if err := json.Unmarshal(data, &entries); err != nil {
 		return err
 	}
+	if *m == nil {
+		*m = make(FuturesPositionMap, len(entries))
+	}
 	for _, e := range entries {
-		m[e.Key] = e.Value
+		(*m)[e.Key] = e.Value
 	}
 	return nil
 }
