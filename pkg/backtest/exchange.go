@@ -441,14 +441,21 @@ func (e *Exchange) ConsumeKLine(k types.KLine, requiredInterval types.Interval) 
 		matching.klineCache = make(map[types.Interval]types.KLine)
 	}
 
-	requiredKline, ok := matching.klineCache[k.Interval]
+	cached, ok := matching.klineCache[k.Interval]
 	if ok { // pop out all the old
-		if requiredKline.Interval != requiredInterval {
-			panic(fmt.Sprintf("expect required kline interval %s, got interval %s, kline = %+v", requiredInterval.String(), requiredKline.Interval.String(), requiredKline))
+		if cached.Interval != requiredInterval {
+			// Non-required interval kline closed (e.g., 1h when required is 1m).
+			// This happens when 1m data has gaps but higher timeframe data exists.
+			// Just replace the old kline — the matching engine only needs 1m,
+			// and this kline will be emitted when the next required interval closes.
+			delete(matching.klineCache, k.Interval)
+			matching.klineCache[k.Interval] = k
+			return
 		}
-		e.currentTime = requiredKline.EndTime.Time()
+
+		e.currentTime = cached.EndTime.Time()
 		// here we generate trades and order updates
-		matching.processKLine(requiredKline)
+		matching.processKLine(cached)
 		matching.nextKLine = &k
 		for _, kline := range matching.klineCache {
 			e.MarketDataStream.EmitKLineClosed(kline)
