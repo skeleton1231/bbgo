@@ -82,9 +82,10 @@ func (s *GRPCStream) Resubscribe(fn func(oldSubs []types.Subscription) (newSubs 
 	}
 	s.mu.Lock()
 	s.subscriptions = newSubs
+	cancelFn := s.cancel
 	s.mu.Unlock()
-	if s.cancel != nil {
-		s.cancel()
+	if cancelFn != nil {
+		cancelFn()
 	}
 	return nil
 }

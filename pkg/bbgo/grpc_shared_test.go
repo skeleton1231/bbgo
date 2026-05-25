@@ -298,6 +298,19 @@ func TestSharedServiceSourceImplementsInterface(t *testing.T) {
 	var _ MarketDataSource = (*SharedServiceSource)(nil)
 }
 
-func TestGRPCStreamImplementsTypesStream(t *testing.T) {
-	var _ types.Stream = (*GRPCStream)(nil)
+func TestGRPCStreamResubscribeUpdatesSubs(t *testing.T) {
+	s := NewGRPCStream(nil, "binance")
+	s.Subscribe(types.KLineChannel, "BTCUSDT", types.SubscribeOptions{Interval: types.Interval1m})
+
+	err := s.Resubscribe(func(oldSubs []types.Subscription) ([]types.Subscription, error) {
+		return []types.Subscription{
+			{Channel: types.KLineChannel, Symbol: "ETHUSDT", Options: types.SubscribeOptions{Interval: types.Interval5m}},
+		}, nil
+	})
+	assert.NoError(t, err)
+
+	subs := s.GetSubscriptions()
+	assert.Len(t, subs, 1)
+	assert.Equal(t, "ETHUSDT", subs[0].Symbol)
+	assert.Equal(t, types.Interval5m, subs[0].Options.Interval)
 }
