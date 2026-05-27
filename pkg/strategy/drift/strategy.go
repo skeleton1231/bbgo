@@ -132,6 +132,12 @@ func (s *Strategy) ID() string {
 }
 
 func (s *Strategy) Defaults() error {
+	if s.Interval == "" {
+		s.Interval = types.Interval1h
+	}
+	if s.MinInterval == "" {
+		s.MinInterval = types.Interval5m
+	}
 	if s.Window == 0 {
 		s.Window = 100
 	}

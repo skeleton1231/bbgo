@@ -221,6 +221,9 @@ func (s *Strategy) Subscribe(session *bbgo.ExchangeSession) {
 }
 
 func (s *Strategy) Defaults() error {
+	if s.Interval == "" {
+		s.Interval = types.Interval15m
+	}
 	if s.NeutralBollinger == nil {
 		s.NeutralBollinger = &BollingerSetting{
 			IntervalWindow: types.IntervalWindow{Interval: s.Interval, Window: 20},

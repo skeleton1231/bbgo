@@ -78,6 +78,10 @@ func (s *Strategy) ID() string {
 	return ID
 }
 
+func (s *Strategy) Validate() error {
+	return nil
+}
+
 func (s *Strategy) Subscribe(session *bbgo.ExchangeSession) {
 	log.Infof("subscribe %s", s.Symbol)
 	session.Subscribe(types.KLineChannel, s.Symbol, types.SubscribeOptions{Interval: s.Interval})

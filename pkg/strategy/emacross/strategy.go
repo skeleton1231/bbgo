@@ -43,6 +43,10 @@ func (s *Strategy) ID() string {
 	return ID
 }
 
+func (s *Strategy) Validate() error {
+	return nil
+}
+
 func (s *Strategy) InstanceID() string {
 	return fmt.Sprintf("%s:%s:%s:%d-%d", ID, s.Symbol, s.Interval, s.FastWindow, s.SlowWindow)
 }

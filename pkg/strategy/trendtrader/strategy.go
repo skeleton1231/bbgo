@@ -70,6 +70,10 @@ func (s *Strategy) ID() string {
 	return ID
 }
 
+func (s *Strategy) Validate() error {
+	return nil
+}
+
 func (s *Strategy) InstanceID() string {
 	return fmt.Sprintf("%s:%s", ID, s.Symbol)
 }
