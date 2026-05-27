@@ -131,6 +131,33 @@ func (s *Strategy) ID() string {
 	return ID
 }
 
+func (s *Strategy) Defaults() error {
+	if s.Window == 0 {
+		s.Window = 100
+	}
+	if s.HLRangeWindow == 0 {
+		s.HLRangeWindow = 100
+	}
+	if s.SmootherWindow == 0 {
+		s.SmootherWindow = 30
+	}
+	if s.FisherTransformWindow == 0 {
+		s.FisherTransformWindow = 14
+	}
+	if s.ATRWindow == 0 {
+		s.ATRWindow = 14
+	}
+	if s.TrendWindow == 0 {
+		s.TrendWindow = 50
+	}
+	return nil
+}
+
+func (s *Strategy) Validate() error {
+	// Market fields are populated by injection after validation, so we skip Market.Validate() here.
+	return nil
+}
+
 func (s *Strategy) InstanceID() string {
 	return fmt.Sprintf("%s:%s:%v", ID, s.Symbol, bbgo.IsBackTesting)
 }

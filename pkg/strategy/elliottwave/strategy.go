@@ -95,6 +95,24 @@ func (s *Strategy) ID() string {
 	return ID
 }
 
+func (s *Strategy) Defaults() error {
+	if s.WindowATR == 0 {
+		s.WindowATR = 14
+	}
+	if s.WindowQuick == 0 {
+		s.WindowQuick = 5
+	}
+	if s.WindowSlow == 0 {
+		s.WindowSlow = 35
+	}
+	return nil
+}
+
+func (s *Strategy) Validate() error {
+	// Market fields are populated by injection after validation, so we skip Market.Validate() here.
+	return nil
+}
+
 func (s *Strategy) InstanceID() string {
 	return fmt.Sprintf("%s:%s:%v", ID, s.Symbol, bbgo.IsBackTesting)
 }

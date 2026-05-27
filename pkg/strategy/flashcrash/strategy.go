@@ -57,6 +57,11 @@ func (s *Strategy) ID() string {
 	return ID
 }
 
+func (s *Strategy) Validate() error {
+	// Market fields are populated by injection after validation, so we skip Market.Validate() here.
+	return nil
+}
+
 func (s *Strategy) updateOrders(orderExecutor bbgo.OrderExecutor, session *bbgo.ExchangeSession) {
 	if err := s.activeOrders.GracefulCancel(context.Background(), session.Exchange); err != nil {
 		log.WithError(err).Errorf("cancel order error")
