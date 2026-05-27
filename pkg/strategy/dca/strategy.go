@@ -78,6 +78,17 @@ func (s *Strategy) ID() string {
 	return ID
 }
 
+func (s *Strategy) Defaults() error {
+	if s.InvestmentInterval == "" {
+		s.InvestmentInterval = types.Interval1d
+	}
+	return nil
+}
+
+func (s *Strategy) Validate() error {
+	return nil
+}
+
 func (s *Strategy) Subscribe(session *bbgo.ExchangeSession) {
 	session.Subscribe(types.KLineChannel, s.Symbol, types.SubscribeOptions{Interval: s.InvestmentInterval})
 }

@@ -83,6 +83,10 @@ func (s *Strategy) Defaults() error {
 	if s.Interval == "" {
 		s.Interval = types.Interval5m
 	}
+
+	if s.Window == 0 {
+		s.Window = 14
+	}
 	return nil
 }
 

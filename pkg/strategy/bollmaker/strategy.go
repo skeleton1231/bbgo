@@ -220,6 +220,22 @@ func (s *Strategy) Subscribe(session *bbgo.ExchangeSession) {
 	s.ExitMethods.SetAndSubscribe(session, s)
 }
 
+func (s *Strategy) Defaults() error {
+	if s.NeutralBollinger == nil {
+		s.NeutralBollinger = &BollingerSetting{
+			IntervalWindow: types.IntervalWindow{Interval: s.Interval, Window: 20},
+			BandWidth:      2.0,
+		}
+	}
+	if s.DefaultBollinger == nil {
+		s.DefaultBollinger = &BollingerSetting{
+			IntervalWindow: types.IntervalWindow{Interval: s.Interval, Window: 20},
+			BandWidth:      3.0,
+		}
+	}
+	return nil
+}
+
 func (s *Strategy) Validate() error {
 	if len(s.Symbol) == 0 {
 		return errors.New("symbol is required")
@@ -499,8 +515,12 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 	s.Status = types.StrategyStatusRunning
 
 	s.shouldBuy = true
-	s.neutralBoll = session.Indicators(s.Symbol).BOLL(s.NeutralBollinger.IntervalWindow, s.NeutralBollinger.BandWidth)
-	s.defaultBoll = session.Indicators(s.Symbol).BOLL(s.DefaultBollinger.IntervalWindow, s.DefaultBollinger.BandWidth)
+	if s.NeutralBollinger != nil {
+		s.neutralBoll = session.Indicators(s.Symbol).BOLL(s.NeutralBollinger.IntervalWindow, s.NeutralBollinger.BandWidth)
+	}
+	if s.DefaultBollinger != nil {
+		s.defaultBoll = session.Indicators(s.Symbol).BOLL(s.DefaultBollinger.IntervalWindow, s.DefaultBollinger.BandWidth)
+	}
 
 	if s.EMACrossSetting != nil && s.EMACrossSetting.Enabled {
 		s.EMACrossSetting.fastEMA = session.Indicators(s.Symbol).EWMA(types.IntervalWindow{Interval: s.Interval, Window: s.EMACrossSetting.FastWindow})
