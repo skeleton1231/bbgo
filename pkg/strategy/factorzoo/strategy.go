@@ -53,6 +53,20 @@ type Strategy struct {
 	bbgo.StrategyController
 }
 
+func (s *Strategy) Defaults() error {
+	if s.Linear == nil {
+		s.Linear = &Linear{}
+	}
+	if s.Linear.Interval == "" {
+		s.Linear.Interval = types.Interval1h
+	}
+	return nil
+}
+
+func (s *Strategy) Validate() error {
+	return nil
+}
+
 func (s *Strategy) Subscribe(session *bbgo.ExchangeSession) {
 	session.Subscribe(types.KLineChannel, s.Symbol, types.SubscribeOptions{Interval: s.Linear.Interval})
 
