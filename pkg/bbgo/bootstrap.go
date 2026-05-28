@@ -34,6 +34,12 @@ func BootstrapEnvironmentLightweight(ctx context.Context, environ *Environment, 
 }
 
 func BootstrapEnvironment(ctx context.Context, environ *Environment, userConfig *Config) error {
+	// Apply environment config early so flags like DisableStartupBalanceQuery
+	// are available when environ.Init() runs (before Trader.Configure).
+	if userConfig.Environment != nil {
+		environ.environmentConfig = userConfig.Environment
+	}
+
 	if err := environ.ConfigureDatabase(ctx, userConfig); err != nil {
 		return err
 	}
