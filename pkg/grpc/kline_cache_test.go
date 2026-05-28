@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -25,6 +26,32 @@ func skipIfNoCGO(t *testing.T) {
 	if err := db.Ping(); err != nil {
 		t.Skip("sqlite3 requires cgo, skipping")
 	}
+}
+
+func createKLineTable(t *testing.T, db *sqlx.DB, tableName string) {
+	t.Helper()
+	_, err := db.Exec(fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS %s (
+			gid INTEGER PRIMARY KEY AUTOINCREMENT,
+			exchange VARCHAR(10) NOT NULL,
+			start_time DATETIME(3) NOT NULL,
+			end_time DATETIME(3) NOT NULL,
+			interval VARCHAR(10) NOT NULL,
+			symbol VARCHAR(20) NOT NULL,
+			open DECIMAL(16,8) NOT NULL DEFAULT 0,
+			high DECIMAL(16,8) NOT NULL DEFAULT 0,
+			low DECIMAL(16,8) NOT NULL DEFAULT 0,
+			close DECIMAL(16,8) NOT NULL DEFAULT 0,
+			volume DECIMAL(16,8) NOT NULL DEFAULT 0,
+			quote_volume DECIMAL(16,8) NOT NULL DEFAULT 0,
+			taker_buy_base_volume DECIMAL(16,8) NOT NULL DEFAULT 0,
+			taker_buy_quote_volume DECIMAL(16,8) NOT NULL DEFAULT 0,
+			closed BOOLEAN NOT NULL DEFAULT TRUE,
+			last_trade_id INT NOT NULL DEFAULT 0,
+			num_trades INT NOT NULL DEFAULT 0
+		)
+	`, tableName))
+	require.NoError(t, err)
 }
 
 func TestKLineCacheKeyFields(t *testing.T) {

@@ -44,6 +44,12 @@ go test -race -tags dnum ./pkg/...
 
 Integration tests require exchange API credentials via env vars (e.g., `BINANCE_API_KEY`). Most unit tests run without credentials.
 
+### Environment Variables
+
+| Variable | Purpose |
+|----------|---------|
+| `KLINE_DB_PATH` | SQLite database path for the 3-layer kline cache (memory → SQLite → API) in the gRPC server. When set, the gRPC `MarketDataService` caches klines to disk. Leave unset for memory-only caching. |
+
 CI also requires MySQL and Redis for full test runs (see `.github/workflows/go.yml`).
 
 ### Test Helpers (`pkg/testing/`)

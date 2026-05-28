@@ -3,6 +3,7 @@ package grpc
 import (
 	"context"
 	"fmt"
+	"math"
 	"regexp"
 	"strings"
 	"sync"
@@ -96,7 +97,7 @@ func (c *KLineCache) setMemory(key klineCacheKey, klines []*pb.KLine, ttl time.D
 	c.entries[key] = &klineCacheEntry{klines: cp, expiresAt: time.Now().Add(ttl)}
 }
 
-const maxDuration time.Duration = 1<<63 - 1
+const maxDuration time.Duration = math.MaxInt64
 
 func (c *KLineCache) evictLocked() {
 	now := time.Now()
@@ -158,6 +159,9 @@ func (c *KLineCache) writeSQLite(ctx context.Context, exchange string, klines []
 	if err != nil {
 		return nil
 	}
+	if err := c.ensureTable(ctx, tableName); err != nil {
+		log.WithError(err).Warn("kline cache: failed to ensure table")
+	}
 	sql := fmt.Sprintf(
 		"INSERT OR IGNORE INTO `%s` (`exchange`, `start_time`, `end_time`, `symbol`, `interval`, `open`, `high`, `low`, `close`, `closed`, `volume`, `quote_volume`, `taker_buy_base_volume`, `taker_buy_quote_volume`) VALUES (:exchange, :start_time, :end_time, :symbol, :interval, :open, :high, :low, :close, :closed, :volume, :quote_volume, :taker_buy_base_volume, :taker_buy_quote_volume)",
 		tableName,
@@ -166,5 +170,31 @@ func (c *KLineCache) writeSQLite(ctx context.Context, exchange string, klines []
 	if err != nil {
 		log.WithError(err).Warn("kline cache: failed to write back to sqlite")
 	}
+	return err
+}
+
+func (c *KLineCache) ensureTable(ctx context.Context, tableName string) error {
+	ddl := fmt.Sprintf(
+		"CREATE TABLE IF NOT EXISTS %s ("+
+			"gid INTEGER PRIMARY KEY AUTOINCREMENT, "+
+			"exchange VARCHAR(10) NOT NULL, "+
+			"start_time DATETIME(3) NOT NULL, "+
+			"end_time DATETIME(3) NOT NULL, "+
+			"interval VARCHAR(10) NOT NULL, "+
+			"symbol VARCHAR(20) NOT NULL, "+
+			"open DECIMAL(16,8) NOT NULL DEFAULT 0, "+
+			"high DECIMAL(16,8) NOT NULL DEFAULT 0, "+
+			"low DECIMAL(16,8) NOT NULL DEFAULT 0, "+
+			"close DECIMAL(16,8) NOT NULL DEFAULT 0, "+
+			"volume DECIMAL(16,8) NOT NULL DEFAULT 0, "+
+			"quote_volume DECIMAL(16,8) NOT NULL DEFAULT 0, "+
+			"taker_buy_base_volume DECIMAL(16,8) NOT NULL DEFAULT 0, "+
+			"taker_buy_quote_volume DECIMAL(16,8) NOT NULL DEFAULT 0, "+
+			"closed BOOLEAN NOT NULL DEFAULT TRUE, "+
+			"last_trade_id INT NOT NULL DEFAULT 0, "+
+			"num_trades INT NOT NULL DEFAULT 0)",
+		tableName,
+	)
+	_, err := c.db.ExecContext(ctx, ddl)
 	return err
 }

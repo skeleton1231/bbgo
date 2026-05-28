@@ -357,6 +357,11 @@ func (s *MarketDataService) QueryKLines(ctx context.Context, request *pb.QueryKL
 				writeCtx, writeCancel := context.WithTimeout(context.Background(), 30*time.Second)
 				go func() {
 					defer writeCancel()
+					defer func() {
+						if r := recover(); r != nil {
+							log.WithField("recover", r).Warn("kline cache: recovered from panic in sqlite write-back")
+						}
+					}()
 					s.cache.writeSQLite(writeCtx, request.Exchange, klines)
 				}()
 			}
