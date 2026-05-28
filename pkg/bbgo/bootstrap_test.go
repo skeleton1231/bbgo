@@ -50,9 +50,9 @@ func TestBootstrapEnvironmentLightweight_SetsEnvironmentConfigEarly(t *testing.T
 
 	_ = BootstrapEnvironmentLightweight(context.Background(), environ, cfg)
 
-	// Lightweight bootstrap does NOT set environmentConfig — this test
-	// documents the current behavior. If it should, this test needs updating.
+	// Lightweight bootstrap intentionally skips environmentConfig — it has
+	// no database or notification setup, so environment flags are unused.
 	if environ.environmentConfig != nil {
-		t.Log("LightweightBootstrap sets environmentConfig (not expected currently)")
+		t.Error("LightweightBootstrap should not set environmentConfig")
 	}
 }
