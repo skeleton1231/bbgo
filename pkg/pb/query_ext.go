@@ -9,8 +9,8 @@ import (
 
 // QueryTickerRequest is a request for querying the current ticker of a symbol.
 type QueryTickerRequest struct {
-	Exchange string
-	Symbol   string
+	Exchange string `protobuf:"bytes,1,opt,name=exchange,proto3" json:"exchange,omitempty"`
+	Symbol   string `protobuf:"bytes,2,opt,name=symbol,proto3" json:"symbol,omitempty"`
 }
 
 func (x *QueryTickerRequest) Reset()         { *x = QueryTickerRequest{} }
@@ -19,8 +19,8 @@ func (x *QueryTickerRequest) ProtoMessage()  {}
 
 // QueryTickerResponse contains the ticker result.
 type QueryTickerResponse struct {
-	Ticker *Ticker
-	Error  *Error
+	Ticker *Ticker `protobuf:"bytes,1,opt,name=ticker,proto3" json:"ticker,omitempty"`
+	Error  *Error  `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
 }
 
 func (x *QueryTickerResponse) Reset()         { *x = QueryTickerResponse{} }
@@ -29,8 +29,8 @@ func (x *QueryTickerResponse) ProtoMessage()  {}
 
 // QueryTickersRequest is a request for querying tickers of multiple symbols.
 type QueryTickersRequest struct {
-	Exchange string
-	Symbols  []string
+	Exchange string   `protobuf:"bytes,1,opt,name=exchange,proto3" json:"exchange,omitempty"`
+	Symbols  []string `protobuf:"bytes,2,rep,name=symbols,proto3" json:"symbols,omitempty"`
 }
 
 func (x *QueryTickersRequest) Reset()         { *x = QueryTickersRequest{} }
@@ -39,8 +39,8 @@ func (x *QueryTickersRequest) ProtoMessage()  {}
 
 // QueryTickersResponse contains the tickers result.
 type QueryTickersResponse struct {
-	Tickers []*Ticker
-	Error   *Error
+	Tickers []*Ticker `protobuf:"bytes,1,rep,name=tickers,proto3" json:"tickers,omitempty"`
+	Error   *Error    `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
 }
 
 func (x *QueryTickersResponse) Reset()         { *x = QueryTickersResponse{} }

@@ -433,6 +433,57 @@ func (s *MarketDataService) QueryTickers(ctx context.Context, request *pb.QueryT
 	return nil, fmt.Errorf("exchange %s not found", request.Exchange)
 }
 
+func registerMarketDataServiceCombined(s *grpc.Server, srv *MarketDataService) {
+	base := pb.MarketDataService_ServiceDesc
+	methods := make([]grpc.MethodDesc, len(base.Methods), len(base.Methods)+2)
+	copy(methods, base.Methods)
+	methods = append(methods,
+		grpc.MethodDesc{
+			MethodName: "QueryTicker",
+			Handler: func(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+				in := new(pb.QueryTickerRequest)
+				if err := dec(in); err != nil {
+					return nil, err
+				}
+				if interceptor == nil {
+					return srv.(*MarketDataService).QueryTicker(ctx, in)
+				}
+				info := &grpc.UnaryServerInfo{
+					Server:     srv,
+					FullMethod: "/bbgo.MarketDataService/QueryTicker",
+				}
+				handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+					return srv.(*MarketDataService).QueryTicker(ctx, req.(*pb.QueryTickerRequest))
+				}
+				return interceptor(ctx, in, info, handler)
+			},
+		},
+		grpc.MethodDesc{
+			MethodName: "QueryTickers",
+			Handler: func(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+				in := new(pb.QueryTickersRequest)
+				if err := dec(in); err != nil {
+					return nil, err
+				}
+				if interceptor == nil {
+					return srv.(*MarketDataService).QueryTickers(ctx, in)
+				}
+				info := &grpc.UnaryServerInfo{
+					Server:     srv,
+					FullMethod: "/bbgo.MarketDataService/QueryTickers",
+				}
+				handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+					return srv.(*MarketDataService).QueryTickers(ctx, req.(*pb.QueryTickersRequest))
+				}
+				return interceptor(ctx, in, info, handler)
+			},
+		},
+	)
+	desc := base
+	desc.Methods = methods
+	s.RegisterService(&desc, srv)
+}
+
 type Server struct {
 	Config      *bbgo.Config
 	Environ     *bbgo.Environment
@@ -460,12 +511,13 @@ func (s *Server) ListenAndServe(bind string) error {
 	}
 
 	var grpcServer = grpc.NewServer()
-	pb.RegisterMarketDataServiceServer(grpcServer, &MarketDataService{
+	mds := &MarketDataService{
 		Config:  s.Config,
 		Environ: s.Environ,
 		Trader:  s.Trader,
 		cache:   klineCache,
-	})
+	}
+	registerMarketDataServiceCombined(grpcServer, mds)
 
 	pb.RegisterTradingServiceServer(grpcServer, &TradingService{
 		Config:  s.Config,
