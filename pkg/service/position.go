@@ -14,14 +14,19 @@ import (
 )
 
 type PositionService struct {
-	DB *sqlx.DB
+	DB       *sqlx.DB
+	Supabase *SupabaseService
 }
 
 func NewPositionService(db *sqlx.DB) *PositionService {
-	return &PositionService{db}
+	return &PositionService{DB: db}
 }
 
 func (s *PositionService) Load(ctx context.Context, id int64) (*types.Position, error) {
+	if s.Supabase != nil {
+		return s.Supabase.LoadPosition(id)
+	}
+
 	var pos types.Position
 
 	rows, err := s.DB.NamedQueryContext(ctx, "SELECT * FROM positions WHERE id = :id", map[string]interface{}{
@@ -46,6 +51,10 @@ func (s *PositionService) Insert(
 	trade types.Trade,
 	profit, netProfit fixedpoint.Value,
 ) error {
+	if s.Supabase != nil {
+		return s.Supabase.InsertPosition(position, trade, profit, netProfit)
+	}
+
 	_, err := s.DB.NamedExec(`
 		INSERT INTO positions (
 			strategy,
@@ -106,6 +115,10 @@ type PositionQueryOptions struct {
 }
 
 func (s *PositionService) Delete(ctx context.Context, options PositionQueryOptions) error {
+	if s.Supabase != nil {
+		return s.Supabase.DeletePositions(ctx, options)
+	}
+
 	del := sq.Delete("positions")
 	if options.Strategy != "" {
 		del = del.Where(sq.Eq{"strategy": options.Strategy})

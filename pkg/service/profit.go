@@ -12,10 +12,15 @@ import (
 )
 
 type ProfitService struct {
-	DB *sqlx.DB
+	DB       *sqlx.DB
+	Supabase *SupabaseService
 }
 
 func (s *ProfitService) Load(ctx context.Context, id int64) (*types.Trade, error) {
+	if s.Supabase != nil {
+		return s.Supabase.LoadProfit(id)
+	}
+
 	var trade types.Trade
 
 	rows, err := s.DB.NamedQueryContext(ctx, "SELECT * FROM trades WHERE id = :id", map[string]interface{}{
@@ -36,6 +41,10 @@ func (s *ProfitService) Load(ctx context.Context, id int64) (*types.Trade, error
 }
 
 func (s *ProfitService) Insert(profit types.Profit) error {
+	if s.Supabase != nil {
+		return s.Supabase.InsertProfit(profit)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -106,6 +115,10 @@ type ProfitQueryOptions struct {
 }
 
 func (s *ProfitService) Delete(ctx context.Context, options ProfitQueryOptions) error {
+	if s.Supabase != nil {
+		return s.Supabase.DeleteProfits(ctx, options)
+	}
+
 	del := sq.Delete("profits")
 	if options.Strategy != "" {
 		del = del.Where(sq.Eq{"strategy": options.Strategy})

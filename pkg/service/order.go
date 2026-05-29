@@ -18,7 +18,8 @@ import (
 )
 
 type OrderService struct {
-	DB *sqlx.DB
+	DB       *sqlx.DB
+	Supabase *SupabaseService
 }
 
 func (s *OrderService) Sync(
@@ -120,6 +121,10 @@ type QueryOrdersOptions struct {
 }
 
 func (s *OrderService) Query(options QueryOrdersOptions) ([]AggOrder, error) {
+	if s.Supabase != nil {
+		return s.Supabase.QueryOrders(options)
+	}
+
 	sql := genOrderSQL(s.DB.DriverName(), options)
 
 	rows, err := s.DB.NamedQuery(sql, map[string]interface{}{
@@ -223,6 +228,10 @@ func (s *OrderService) scanRows(rows *sqlx.Rows) (orders []types.Order, err erro
 }
 
 func (s *OrderService) Insert(order types.Order) (err error) {
+	if s.Supabase != nil {
+		return s.Supabase.InsertOrder(order)
+	}
+
 	if s.DB.DriverName() == "mysql" {
 		_, err = s.DB.NamedExec(`
 			INSERT INTO orders (exchange, order_id, client_order_id, order_type, status, symbol, price, stop_price, quantity, executed_quantity, side, is_working, time_in_force, created_at, updated_at, is_margin, is_futures, is_isolated, uuid, actual_order_id)

@@ -232,6 +232,10 @@ func (environ *Environment) ConfigureDatabase(ctx context.Context, config *Confi
 func (environ *Environment) ConfigureDatabaseDriver(
 	ctx context.Context, driver string, dsn string, extraPkgNames ...string,
 ) error {
+	if driver == "supabase" {
+		return environ.configureSupabase()
+	}
+
 	environ.DatabaseService = service.NewDatabaseService(driver, dsn)
 	environ.DatabaseService.AddMigrationPackages(extraPkgNames...)
 
@@ -263,6 +267,30 @@ func (environ *Environment) ConfigureDatabaseDriver(
 		WithdrawService: &service.WithdrawService{DB: db},
 		DepositService:  &service.DepositService{DB: db},
 	}
+
+	return nil
+}
+
+func (environ *Environment) configureSupabase() error {
+	url := os.Getenv("SUPABASE_URL")
+	key := os.Getenv("SUPABASE_SERVICE_KEY")
+	userID := os.Getenv("BBGO_USER_ID")
+
+	if url == "" || key == "" || userID == "" {
+		return fmt.Errorf("supabase mode requires SUPABASE_URL, SUPABASE_SERVICE_KEY, and BBGO_USER_ID env vars")
+	}
+
+	supaSvc, err := service.NewSupabaseService(url, key, userID)
+	if err != nil {
+		return fmt.Errorf("init supabase: %w", err)
+	}
+
+	log.Infof("using supabase backend for user %s", userID)
+
+	environ.OrderService = &service.OrderService{Supabase: supaSvc}
+	environ.TradeService = &service.TradeService{Supabase: supaSvc}
+	environ.ProfitService = &service.ProfitService{Supabase: supaSvc}
+	environ.PositionService = &service.PositionService{Supabase: supaSvc}
 
 	return nil
 }

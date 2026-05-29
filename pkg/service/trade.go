@@ -63,11 +63,12 @@ type TradingVolumeQueryOptions struct {
 }
 
 type TradeService struct {
-	DB *sqlx.DB
+	DB       *sqlx.DB
+	Supabase *SupabaseService
 }
 
 func NewTradeService(db *sqlx.DB) *TradeService {
-	return &TradeService{db}
+	return &TradeService{DB: db}
 }
 
 func (s *TradeService) Sync(
@@ -142,6 +143,10 @@ func (s *TradeService) Sync(
 }
 
 func (s *TradeService) QueryTradingVolume(startTime time.Time, options TradingVolumeQueryOptions) ([]TradingVolume, error) {
+	if s.Supabase != nil {
+		return s.Supabase.QueryTradingVolume(startTime, options)
+	}
+
 	args := map[string]interface{}{
 		// "symbol":      symbol,
 		// "exchange":    ex,
@@ -285,6 +290,10 @@ func generateMysqlTradingVolumeQuerySQL(options TradingVolumeQueryOptions) strin
 }
 
 func (s *TradeService) QueryForTradingFeeCurrency(ex types.ExchangeName, symbol string, feeCurrency string) ([]types.Trade, error) {
+	if s.Supabase != nil {
+		return s.Supabase.QueryForTradingFeeCurrency(ex, symbol, feeCurrency)
+	}
+
 	sql := "SELECT " + strings.Join(genTradeSelectColumns(s.DB.DriverName()), ", ") + " FROM trades WHERE exchange = :exchange AND (symbol = :symbol OR fee_currency = :fee_currency) ORDER BY traded_at ASC"
 	rows, err := s.DB.NamedQuery(sql, map[string]interface{}{
 		"exchange":     ex,
@@ -301,6 +310,10 @@ func (s *TradeService) QueryForTradingFeeCurrency(ex types.ExchangeName, symbol 
 }
 
 func (s *TradeService) Query(options QueryTradesOptions) ([]types.Trade, error) {
+	if s.Supabase != nil {
+		return s.Supabase.QueryTrades(options)
+	}
+
 	sel := sq.Select(genTradeSelectColumns(s.DB.DriverName())...).
 		From("trades")
 
@@ -385,6 +398,10 @@ func (s *TradeService) Query(options QueryTradesOptions) ([]types.Trade, error) 
 }
 
 func (s *TradeService) Load(ctx context.Context, id int64) (*types.Trade, error) {
+	if s.Supabase != nil {
+		return s.Supabase.LoadTrade(id)
+	}
+
 	var trade types.Trade
 	query := "SELECT " + strings.Join(genTradeSelectColumns(s.DB.DriverName()), ", ") + " FROM trades WHERE id = :id"
 	rows, err := s.DB.NamedQueryContext(ctx, query, map[string]interface{}{
@@ -480,6 +497,10 @@ func (s *TradeService) scanRows(rows *sqlx.Rows) (trades []types.Trade, err erro
 }
 
 func (s *TradeService) Insert(trade types.Trade) error {
+	if s.Supabase != nil {
+		return s.Supabase.InsertTrade(trade)
+	}
+
 	if s.DB.DriverName() == "mysql" {
 		_, err := s.DB.NamedExec(`
 			INSERT INTO trades (id, order_id, order_uuid, exchange, price, quantity, quote_quantity, symbol, side, is_buyer, is_maker, traded_at, fee, fee_currency, is_margin, is_futures, is_isolated, strategy, pnl)
