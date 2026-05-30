@@ -29,7 +29,7 @@ func NewSupabaseService(url, key, userID string) (*SupabaseService, error) {
 }
 
 func (s *SupabaseService) InsertOrder(order types.Order) error {
-	row := supabasetypes.PublicSyncOrdersInsert{
+	row := supabasetypes.PublicOrdersInsert{
 		UserId:           s.userID,
 		OrderId:          fmt.Sprintf("%d", order.OrderID),
 		Symbol:           order.Symbol,
@@ -37,9 +37,8 @@ func (s *SupabaseService) InsertOrder(order types.Order) error {
 		Price:            order.Price.String(),
 		Quantity:         order.Quantity.String(),
 		Status:           string(order.Status),
-		Type:             string(order.Type),
+		OrderType:        string(order.Type),
 		ExecutedQuantity: ptrStr(order.ExecutedQuantity.String()),
-		CreationTime:     ptrStr(order.CreationTime.Time().Format(time.RFC3339Nano)),
 		Exchange:         ptrStr(order.Exchange.String()),
 		ClientOrderId:    ptrStr(order.ClientOrderID),
 		TimeInForce:      ptrStr(string(order.TimeInForce)),
@@ -52,7 +51,7 @@ func (s *SupabaseService) InsertOrder(order types.Order) error {
 		OrderUuid:        ptrStr(order.UUID),
 		ActualOrderId:    ptrInt64(int64(order.ActualOrderId)),
 	}
-	_, _, err := s.client.From("sync_orders").Upsert(row, "user_id,order_id", "", "").Execute()
+	_, _, err := s.client.From("orders").Upsert(row, "user_id,order_id", "", "").Execute()
 	if err != nil {
 		return fmt.Errorf("supabase upsert order: %w", err)
 	}
@@ -61,7 +60,7 @@ func (s *SupabaseService) InsertOrder(order types.Order) error {
 
 func (s *SupabaseService) InsertTrade(trade types.Trade) error {
 	pnlStr := fmt.Sprintf("%v", trade.PnL.Float64)
-	row := supabasetypes.PublicSyncTradesInsert{
+	row := supabasetypes.PublicTradesInsert{
 		UserId:        s.userID,
 		TradeId:       fmt.Sprintf("%d", trade.ID),
 		OrderId:       fmt.Sprintf("%d", trade.OrderID),
@@ -83,7 +82,7 @@ func (s *SupabaseService) InsertTrade(trade types.Trade) error {
 		OrderUuid:     ptrStr(trade.OrderUUID),
 		Pnl:           &pnlStr,
 	}
-	_, _, err := s.client.From("sync_trades").Upsert(row, "user_id,trade_id", "", "").Execute()
+	_, _, err := s.client.From("trades").Upsert(row, "user_id,trade_id", "", "").Execute()
 	if err != nil {
 		return fmt.Errorf("supabase upsert trade: %w", err)
 	}
@@ -158,7 +157,7 @@ func (s *SupabaseService) InsertPosition(
 // --- Read methods ---
 
 func (s *SupabaseService) QueryOrders(options QueryOrdersOptions) ([]AggOrder, error) {
-	q := s.client.From("sync_orders").Select("*", "", false).Eq("user_id", s.userID)
+	q := s.client.From("orders").Select("*", "", false).Eq("user_id", s.userID)
 
 	if options.Exchange != "" {
 		q = q.Eq("exchange", string(options.Exchange))
@@ -171,14 +170,14 @@ func (s *SupabaseService) QueryOrders(options QueryOrdersOptions) ([]AggOrder, e
 	if ordering == "" {
 		ordering = "ASC"
 	}
-	q = q.Order("creation_time", &postgrest.OrderOpts{Ascending: ordering == "ASC"}).Limit(500, "")
+	q = q.Order("created_at", &postgrest.OrderOpts{Ascending: ordering == "ASC"}).Limit(500, "")
 
 	result, _, err := q.Execute()
 	if err != nil {
 		return nil, fmt.Errorf("supabase query orders: %w", err)
 	}
 
-	var rows []supabasetypes.PublicSyncOrdersSelect
+	var rows []supabasetypes.PublicOrdersSelect
 	if err := json.Unmarshal(result, &rows); err != nil {
 		return nil, fmt.Errorf("supabase unmarshal orders: %w", err)
 	}
@@ -195,7 +194,7 @@ func (s *SupabaseService) QueryOrders(options QueryOrdersOptions) ([]AggOrder, e
 }
 
 func (s *SupabaseService) QueryTrades(options QueryTradesOptions) ([]types.Trade, error) {
-	q := s.client.From("sync_trades").Select("*", "", false).Eq("user_id", s.userID)
+	q := s.client.From("trades").Select("*", "", false).Eq("user_id", s.userID)
 
 	if options.Exchange != "" {
 		q = q.Eq("exchange", string(options.Exchange))
@@ -236,7 +235,7 @@ func (s *SupabaseService) QueryTrades(options QueryTradesOptions) ([]types.Trade
 		return nil, fmt.Errorf("supabase query trades: %w", err)
 	}
 
-	var rows []supabasetypes.PublicSyncTradesSelect
+	var rows []supabasetypes.PublicTradesSelect
 	if err := json.Unmarshal(result, &rows); err != nil {
 		return nil, fmt.Errorf("supabase unmarshal trades: %w", err)
 	}
@@ -253,7 +252,7 @@ func (s *SupabaseService) QueryTrades(options QueryTradesOptions) ([]types.Trade
 }
 
 func (s *SupabaseService) LoadTrade(id int64) (*types.Trade, error) {
-	result, _, err := s.client.From("sync_trades").
+	result, _, err := s.client.From("trades").
 		Select("*", "", false).
 		Eq("user_id", s.userID).
 		Eq("trade_id", strconv.FormatInt(id, 10)).
@@ -263,7 +262,7 @@ func (s *SupabaseService) LoadTrade(id int64) (*types.Trade, error) {
 		return nil, fmt.Errorf("supabase load trade: %w", err)
 	}
 
-	var rows []supabasetypes.PublicSyncTradesSelect
+	var rows []supabasetypes.PublicTradesSelect
 	if err := json.Unmarshal(result, &rows); err != nil {
 		return nil, fmt.Errorf("supabase unmarshal trade: %w", err)
 	}
@@ -280,7 +279,7 @@ func (s *SupabaseService) LoadTrade(id int64) (*types.Trade, error) {
 }
 
 func (s *SupabaseService) QueryForTradingFeeCurrency(ex types.ExchangeName, symbol, feeCurrency string) ([]types.Trade, error) {
-	q := s.client.From("sync_trades").Select("*", "", false).
+	q := s.client.From("trades").Select("*", "", false).
 		Eq("user_id", s.userID).
 		Eq("exchange", string(ex))
 
@@ -292,7 +291,7 @@ func (s *SupabaseService) QueryForTradingFeeCurrency(ex types.ExchangeName, symb
 		return nil, fmt.Errorf("supabase query trades for fee currency: %w", err)
 	}
 
-	var rows []supabasetypes.PublicSyncTradesSelect
+	var rows []supabasetypes.PublicTradesSelect
 	if err := json.Unmarshal(result, &rows); err != nil {
 		return nil, fmt.Errorf("supabase unmarshal trades: %w", err)
 	}
@@ -309,7 +308,7 @@ func (s *SupabaseService) QueryForTradingFeeCurrency(ex types.ExchangeName, symb
 }
 
 func (s *SupabaseService) QueryTradingVolume(startTime time.Time, options TradingVolumeQueryOptions) ([]TradingVolume, error) {
-	q := s.client.From("sync_trades").Select("traded_at,symbol,exchange,quantity,price", "", false).
+	q := s.client.From("trades").Select("traded_at,symbol,exchange,quantity,price", "", false).
 		Eq("user_id", s.userID).
 		Gte("traded_at", startTime.Format(time.RFC3339Nano)).
 		Order("traded_at", &postgrest.OrderOpts{Ascending: true}).
@@ -420,15 +419,15 @@ func (s *SupabaseService) DeletePositions(_ context.Context, options PositionQue
 
 // --- Conversion helpers ---
 
-func supabaseOrderToOrder(row supabasetypes.PublicSyncOrdersSelect) (types.Order, error) {
+func supabaseOrderToOrder(row supabasetypes.PublicOrdersSelect) (types.Order, error) {
 	orderID, err := strconv.ParseUint(row.OrderId, 10, 64)
 	if err != nil {
 		return types.Order{}, fmt.Errorf("parse order_id: %w", err)
 	}
 
 	var creationTime time.Time
-	if row.CreationTime != nil && *row.CreationTime != "" {
-		creationTime, _ = time.Parse(time.RFC3339Nano, *row.CreationTime)
+	if row.CreatedAt != "" {
+		creationTime, _ = time.Parse(time.RFC3339Nano, row.CreatedAt)
 	}
 
 	order := types.Order{
@@ -436,7 +435,7 @@ func supabaseOrderToOrder(row supabasetypes.PublicSyncOrdersSelect) (types.Order
 			ClientOrderID: row.ClientOrderId,
 			Symbol:        row.Symbol,
 			Side:          types.SideType(strings.ToUpper(row.Side)),
-			Type:          types.OrderType(strings.ToUpper(row.Type)),
+			Type:          types.OrderType(strings.ToUpper(row.OrderType)),
 			Price:         parseFixedPoint(row.Price),
 			StopPrice:     parseFixedPoint(row.StopPrice),
 			Quantity:      parseFixedPoint(row.Quantity),
@@ -457,7 +456,7 @@ func supabaseOrderToOrder(row supabasetypes.PublicSyncOrdersSelect) (types.Order
 	return order, nil
 }
 
-func supabaseTradeToTrade(row supabasetypes.PublicSyncTradesSelect) (types.Trade, error) {
+func supabaseTradeToTrade(row supabasetypes.PublicTradesSelect) (types.Trade, error) {
 	tradeID, err := strconv.ParseUint(row.TradeId, 10, 64)
 	if err != nil {
 		return types.Trade{}, fmt.Errorf("parse trade_id: %w", err)

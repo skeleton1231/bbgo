@@ -642,12 +642,21 @@ func (s *Stream) createEndpoint(ctx context.Context) (string, error) {
 		return WsSpotWebSocketURL, nil
 	}
 
-	return s.createUserDataStreamEndpoint(ctx)
+	endpoint, err := s.createUserDataStreamEndpoint(ctx)
+	if err != nil && testNet {
+		log.WithError(err).Warn("user data stream endpoint creation failed on testnet, falling back to public-only stream")
+		return s.getPublicEndpointUrl(), nil
+	}
+	return endpoint, err
 }
 
 func (s *Stream) createUserDataStreamEndpoint(ctx context.Context) (string, error) {
-	// Use new listenToken method (recommended as of 2025-10-06)
-	if s.exchange.IsMargin && !s.exchange.useListenKey {
+	if s.exchange.useListenKey {
+		return s.createUserDataStreamEndpointWithListenKey(ctx)
+	}
+
+	// Prefer listenToken for margin and testnet (listenKey REST endpoint removed from testnet 2025-05)
+	if s.exchange.IsMargin || testNet {
 		return s.createUserDataStreamEndpointWithListenToken(ctx)
 	}
 

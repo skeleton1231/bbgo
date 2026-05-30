@@ -36,7 +36,7 @@ func TestSupabaseServiceInsertOrderMapping(t *testing.T) {
 	order.TimeInForce = types.TimeInForceGTC
 	order.UUID = "order-uuid-123"
 
-	row := supabasetypes.PublicSyncOrdersInsert{
+	row := supabasetypes.PublicOrdersInsert{
 		UserId:           svc.userID,
 		OrderId:          "12345",
 		Symbol:           order.Symbol,
@@ -44,7 +44,7 @@ func TestSupabaseServiceInsertOrderMapping(t *testing.T) {
 		Price:            "50000",
 		Quantity:         "0.1",
 		Status:           "filled",
-		Type:             "limit",
+		OrderType:        "limit",
 		ExecutedQuantity: ptrStr("0.1"),
 		Exchange:         ptrStr("binance"),
 		ClientOrderId:    ptrStr("client-123"),
@@ -96,7 +96,7 @@ func TestSupabaseServiceInsertTradeMapping(t *testing.T) {
 	}
 	trade.PnL.Float64 = 42.5
 
-	row := supabasetypes.PublicSyncTradesInsert{
+	row := supabasetypes.PublicTradesInsert{
 		UserId:        svc.userID,
 		TradeId:       "999",
 		OrderId:       "12345",
@@ -232,21 +232,21 @@ func TestSupabaseServiceInsertPositionMapping(t *testing.T) {
 }
 
 func TestSupabaseOrderRoundTrip(t *testing.T) {
-	row := supabasetypes.PublicSyncOrdersSelect{
+	row := supabasetypes.PublicOrdersSelect{
 		OrderId:          "12345",
 		Symbol:           "BTCUSDT",
 		Side:             "BUY",
 		Price:            "50000",
 		Quantity:         "0.1",
 		Status:           "filled",
-		Type:             "limit",
+		OrderType:        "limit",
 		ExecutedQuantity: ptrStr("0.1"),
 		Exchange:         "binance",
 		ClientOrderId:    "client-abc",
 		TimeInForce:      "GTC",
 		StopPrice:        "49000",
 		IsWorking:        true,
-		CreationTime:     ptrStr("2026-01-15T10:30:00Z"),
+		CreatedAt:        "2026-01-15T10:30:00Z",
 		IsMargin:         true,
 		IsFutures:        false,
 		IsIsolated:       false,
@@ -275,7 +275,7 @@ func TestSupabaseOrderRoundTrip(t *testing.T) {
 }
 
 func TestSupabaseTradeRoundTrip(t *testing.T) {
-	row := supabasetypes.PublicSyncTradesSelect{
+	row := supabasetypes.PublicTradesSelect{
 		TradeId:       "999",
 		OrderId:       "12345",
 		Symbol:        "ETHUSDT",

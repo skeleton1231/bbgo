@@ -123,7 +123,8 @@ CLI (cmd/bbgo → pkg/cmd)
 - **`pkg/exchange/`** — Exchange adapters (REST + WebSocket); factory in `factory.go`. Each exchange has its own sub-package (e.g., `pkg/exchange/binance/`)
 - **`pkg/strategy/`** — Built-in strategies (grid2, xmaker, bollmaker, supertrend, etc.)
 - **`pkg/indicator/`** — Technical indicators (SMA, EMA, MACD, RSI, Bollinger, etc.) with a pandas.Series-like interface
-- **`pkg/service/`** — Persistence and business logic (database, backtest, orders, trades)
+- **`pkg/service/`** — Persistence and business logic (database, backtest, orders, trades). Includes `supabase_client.go` for direct Supabase writes when `DB_DRIVER=supabase`.
+- **`pkg/supabasetypes/`** — Auto-generated Go types for Supabase tables (regenerated via `pnpm sb go-types` from `saas/web/`)
 - **`pkg/core/`** — TradeCollector, order store, KLine driver
 - **`pkg/backtest/`** — Backtesting engine
 - **`pkg/server/`** — HTTP API and web dashboard server
@@ -158,7 +159,25 @@ YAML config files (e.g., `bbgo.yaml`) define exchange sessions and strategy para
 
 ### Database
 
-Supports MySQL and SQLite via rockhopper migrations. Migration SQL files are in `migrations/` and compiled Go packages in `pkg/migrations/`.
+Supports MySQL, SQLite, and Supabase via rockhopper migrations. Migration SQL files are in `migrations/` and compiled Go packages in `pkg/migrations/`.
+
+#### Supabase Direct Write (`DB_DRIVER=supabase`)
+
+When `DB_DRIVER=supabase` is set (along with `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `DB_USER_ID`), bbgo writes orders, trades, positions, and profits directly to Supabase via REST API instead of SQLite. This is the mode used in the SaaS deployment.
+
+- **Types**: `pkg/supabasetypes/database_types.go` — auto-generated from Supabase schema
+- **Service**: `pkg/service/supabase_client.go` — InsertOrder/InsertTrade/InsertPosition/InsertProfit + query methods
+- **Tables**: `orders`, `trades`, `positions`, `profits` (match bbgo's original SQLite table design)
+- Orders use `order_type` column (not `type`) to match bbgo's original schema
+- Multi-tenant via `user_id` column on all tables
+
+**Type generation**: All Supabase Go types and TypeScript types are regenerated from the live database using `pnpm sb` from the `saas/web/` directory:
+```bash
+cd saas/web
+pnpm sb push          # push migrations to remote database
+pnpm sb go-types      # regenerate → manager/supabase_types.go + pkg/supabasetypes/database_types.go
+pnpm sb types         # regenerate → web/src/lib/supabase/types.ts
+```
 
 ## Strategy Development
 

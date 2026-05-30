@@ -47,7 +47,7 @@ const FuturesWebSocketURL = "wss://fstream.binance.com"
 const TestNetFuturesWebSocketURL = "wss://stream.binancefuture.com"
 
 // TestNet URLs
-const TestNetWebSocketURL = "wss://testnet.binance.vision"
+const TestNetWebSocketURL = "wss://stream.testnet.binance.vision"
 const TestNetFuturesBaseURL = "https://testnet.binancefuture.com"
 
 // New WebSocket API Endpoints

@@ -11,7 +11,8 @@ contracts/
 linode/
 frontend/
 desktop/
-saas/
+saas/web/
+saas/web/node_modules/
 
 **/node_modules
 **/.next

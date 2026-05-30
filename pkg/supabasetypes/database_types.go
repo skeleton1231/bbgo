@@ -69,63 +69,10 @@ type PublicExchangeCredentialsUpdate struct {
   UserId              *string `json:"user_id"`
 }
 
-type PublicBotsSelect struct {
-  BbgoPid       *int32      `json:"bbgo_pid"`
-  Config        interface{} `json:"config"`
-  ConfigPath    *string     `json:"config_path"`
-  CreatedAt     string      `json:"created_at"`
-  Exchange      string      `json:"exchange"`
-  GrpcPort      *int32      `json:"grpc_port"`
-  Id            string      `json:"id"`
-  Mode          string      `json:"mode"`
-  Name          string      `json:"name"`
-  Status        string      `json:"status"`
-  Strategy      string      `json:"strategy"`
-  UpdatedAt     string      `json:"updated_at"`
-  UserId        string      `json:"user_id"`
-  WebserverPort *int32      `json:"webserver_port"`
-}
-
-type PublicBotsInsert struct {
-  BbgoPid       *int32      `json:"bbgo_pid"`
-  Config        interface{} `json:"config"`
-  ConfigPath    *string     `json:"config_path"`
-  CreatedAt     *string     `json:"created_at"`
-  Exchange      string      `json:"exchange"`
-  GrpcPort      *int32      `json:"grpc_port"`
-  Id            *string     `json:"id"`
-  Mode          *string     `json:"mode"`
-  Name          string      `json:"name"`
-  Status        *string     `json:"status"`
-  Strategy      string      `json:"strategy"`
-  UpdatedAt     *string     `json:"updated_at"`
-  UserId        string      `json:"user_id"`
-  WebserverPort *int32      `json:"webserver_port"`
-}
-
-type PublicBotsUpdate struct {
-  BbgoPid       *int32      `json:"bbgo_pid"`
-  Config        interface{} `json:"config"`
-  ConfigPath    *string     `json:"config_path"`
-  CreatedAt     *string     `json:"created_at"`
-  Exchange      *string     `json:"exchange"`
-  GrpcPort      *int32      `json:"grpc_port"`
-  Id            *string     `json:"id"`
-  Mode          *string     `json:"mode"`
-  Name          *string     `json:"name"`
-  Status        *string     `json:"status"`
-  Strategy      *string     `json:"strategy"`
-  UpdatedAt     *string     `json:"updated_at"`
-  UserId        *string     `json:"user_id"`
-  WebserverPort *int32      `json:"webserver_port"`
-}
-
-type PublicSyncOrdersSelect struct {
+type PublicOrdersSelect struct {
   ActualOrderId    int64   `json:"actual_order_id"`
-  BotId            *string `json:"bot_id"`
   ClientOrderId    string  `json:"client_order_id"`
   CreatedAt        string  `json:"created_at"`
-  CreationTime     *string `json:"creation_time"`
   Exchange         string  `json:"exchange"`
   ExecutedQuantity *string `json:"executed_quantity"`
   Id               string  `json:"id"`
@@ -134,6 +81,7 @@ type PublicSyncOrdersSelect struct {
   IsMargin         bool    `json:"is_margin"`
   IsWorking        bool    `json:"is_working"`
   OrderId          string  `json:"order_id"`
+  OrderType        string  `json:"order_type"`
   OrderUuid        string  `json:"order_uuid"`
   Price            string  `json:"price"`
   Quantity         string  `json:"quantity"`
@@ -141,19 +89,15 @@ type PublicSyncOrdersSelect struct {
   Status           string  `json:"status"`
   StopPrice        string  `json:"stop_price"`
   Symbol           string  `json:"symbol"`
-  SyncedAt         string  `json:"synced_at"`
   TimeInForce      string  `json:"time_in_force"`
-  Type             string  `json:"type"`
   UpdatedAt        string  `json:"updated_at"`
   UserId           string  `json:"user_id"`
 }
 
-type PublicSyncOrdersInsert struct {
+type PublicOrdersInsert struct {
   ActualOrderId    *int64  `json:"actual_order_id"`
-  BotId            *string `json:"bot_id"`
   ClientOrderId    *string `json:"client_order_id"`
   CreatedAt        *string `json:"created_at"`
-  CreationTime     *string `json:"creation_time"`
   Exchange         *string `json:"exchange"`
   ExecutedQuantity *string `json:"executed_quantity"`
   Id               *string `json:"id"`
@@ -162,6 +106,7 @@ type PublicSyncOrdersInsert struct {
   IsMargin         *bool   `json:"is_margin"`
   IsWorking        *bool   `json:"is_working"`
   OrderId          string  `json:"order_id"`
+  OrderType        string  `json:"order_type"`
   OrderUuid        *string `json:"order_uuid"`
   Price            string  `json:"price"`
   Quantity         string  `json:"quantity"`
@@ -169,19 +114,15 @@ type PublicSyncOrdersInsert struct {
   Status           string  `json:"status"`
   StopPrice        *string `json:"stop_price"`
   Symbol           string  `json:"symbol"`
-  SyncedAt         *string `json:"synced_at"`
   TimeInForce      *string `json:"time_in_force"`
-  Type             string  `json:"type"`
   UpdatedAt        *string `json:"updated_at"`
   UserId           string  `json:"user_id"`
 }
 
-type PublicSyncOrdersUpdate struct {
+type PublicOrdersUpdate struct {
   ActualOrderId    *int64  `json:"actual_order_id"`
-  BotId            *string `json:"bot_id"`
   ClientOrderId    *string `json:"client_order_id"`
   CreatedAt        *string `json:"created_at"`
-  CreationTime     *string `json:"creation_time"`
   Exchange         *string `json:"exchange"`
   ExecutedQuantity *string `json:"executed_quantity"`
   Id               *string `json:"id"`
@@ -190,6 +131,7 @@ type PublicSyncOrdersUpdate struct {
   IsMargin         *bool   `json:"is_margin"`
   IsWorking        *bool   `json:"is_working"`
   OrderId          *string `json:"order_id"`
+  OrderType        *string `json:"order_type"`
   OrderUuid        *string `json:"order_uuid"`
   Price            *string `json:"price"`
   Quantity         *string `json:"quantity"`
@@ -197,16 +139,12 @@ type PublicSyncOrdersUpdate struct {
   Status           *string `json:"status"`
   StopPrice        *string `json:"stop_price"`
   Symbol           *string `json:"symbol"`
-  SyncedAt         *string `json:"synced_at"`
   TimeInForce      *string `json:"time_in_force"`
-  Type             *string `json:"type"`
   UpdatedAt        *string `json:"updated_at"`
   UserId           *string `json:"user_id"`
 }
 
-type PublicSyncTradesSelect struct {
-  BotId         *string `json:"bot_id"`
-  CreatedAt     string  `json:"created_at"`
+type PublicTradesSelect struct {
   Exchange      string  `json:"exchange"`
   Fee           string  `json:"fee"`
   FeeCurrency   string  `json:"fee_currency"`
@@ -225,15 +163,12 @@ type PublicSyncTradesSelect struct {
   Side          string  `json:"side"`
   Strategy      string  `json:"strategy"`
   Symbol        string  `json:"symbol"`
-  SyncedAt      string  `json:"synced_at"`
   TradeId       string  `json:"trade_id"`
   TradedAt      *string `json:"traded_at"`
   UserId        string  `json:"user_id"`
 }
 
-type PublicSyncTradesInsert struct {
-  BotId         *string `json:"bot_id"`
-  CreatedAt     *string `json:"created_at"`
+type PublicTradesInsert struct {
   Exchange      *string `json:"exchange"`
   Fee           string  `json:"fee"`
   FeeCurrency   string  `json:"fee_currency"`
@@ -252,15 +187,12 @@ type PublicSyncTradesInsert struct {
   Side          string  `json:"side"`
   Strategy      *string `json:"strategy"`
   Symbol        string  `json:"symbol"`
-  SyncedAt      *string `json:"synced_at"`
   TradeId       string  `json:"trade_id"`
   TradedAt      *string `json:"traded_at"`
   UserId        string  `json:"user_id"`
 }
 
-type PublicSyncTradesUpdate struct {
-  BotId         *string `json:"bot_id"`
-  CreatedAt     *string `json:"created_at"`
+type PublicTradesUpdate struct {
   Exchange      *string `json:"exchange"`
   Fee           *string `json:"fee"`
   FeeCurrency   *string `json:"fee_currency"`
@@ -279,7 +211,6 @@ type PublicSyncTradesUpdate struct {
   Side          *string `json:"side"`
   Strategy      *string `json:"strategy"`
   Symbol        *string `json:"symbol"`
-  SyncedAt      *string `json:"synced_at"`
   TradeId       *string `json:"trade_id"`
   TradedAt      *string `json:"traded_at"`
   UserId        *string `json:"user_id"`
