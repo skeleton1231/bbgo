@@ -188,6 +188,17 @@ pnpm sb types         # regenerate → web/src/lib/supabase/types.ts
 5. Add config tests similar to `pkg/bbgo/config_test.go`
 6. Use `testify` for assertions (already in go.mod)
 
+### SaaS-Exposed Strategies (50 of 55+ registered)
+
+The SaaS frontend (`saas/web/src/lib/bbgo/strategies.ts`) exposes 50 strategies across 10 categories. Strategies not in the SaaS frontend (etf, liquditycorr, marketcap, tradingdesk, tri, example/*) are intentionally excluded. 22 strategies are `liveOnly` (blocked from paper/simulation mode). 10 are cross-exchange strategies requiring multiple exchange sessions.
+
+When adding a new strategy to the SaaS:
+1. Register in bbgo via `bbgo.RegisterStrategy(ID, &Strategy{})`
+2. Add `StrategySchema` entry to `STRATEGY_SCHEMAS` in `saas/web/src/lib/bbgo/strategies.ts`
+3. If live-only, add to `liveOnlyStrategies` map in `saas/manager/user.go`
+4. If cross-exchange, define `sessionRoles` in the schema entry
+5. If renaming an old ID, add alias to `legacyStrategyAliases` in `saas/manager/user.go`
+
 ## Build Tag Constraints
 
 Some code and tests use `//go:build dnum` or `//go:build !dnum` to conditionally compile between standard `float64` and high-precision `dnum` decimal math. When adding dnum-specific code paths, mirror the build constraints in tests.
