@@ -110,6 +110,8 @@ func init() {
 
 	dualSidePosition, _ = envvar.Bool("BINANCE_ENABLE_FUTURES_HEDGE_MODE", false)
 	testNet, _ = envvar.Bool("BINANCE_TESTNET", false)
+	binance.UseTestnet = testNet
+	futures.UseTestnet = testNet
 }
 
 func isBinanceUs() bool {
