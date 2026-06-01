@@ -325,6 +325,13 @@ func (s *Server) listStrategies(c *gin.Context) {
 
 		stash["strategy"] = mount.Strategy.ID()
 
+		type instanceIDER interface{ InstanceID() string }
+		if iid, ok := mount.Strategy.(instanceIDER); ok {
+			stash["strategyInstanceID"] = iid.InstanceID()
+		} else {
+			stash["strategyInstanceID"] = mount.Strategy.ID()
+		}
+
 		stashes = append(stashes, stash)
 	}
 
