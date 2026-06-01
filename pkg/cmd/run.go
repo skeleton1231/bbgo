@@ -151,10 +151,10 @@ func runConfig(basectx context.Context, cmd *cobra.Command, userConfig *bbgo.Con
 		if err := environ.Sync(tradingCtx, userConfig); err != nil {
 			return err
 		}
+	}
 
-		if userConfig.Sync != nil {
-			environ.BindSync(userConfig.Sync)
-		}
+	if userConfig.Sync != nil {
+		environ.BindSync(userConfig.Sync)
 	}
 
 	trader := bbgo.NewTrader(environ)
