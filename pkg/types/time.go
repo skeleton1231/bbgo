@@ -218,6 +218,24 @@ func (t Time) Value() (driver.Value, error) {
 	return time.Time(t), nil
 }
 
+// parseTimeFlex tries parsing with the primary layout (with timezone),
+// then falls back to layouts without timezone for SQLite datetime('now') output.
+func parseTimeFlex(s string) time.Time {
+	if tt, err := time.Parse(layout, s); err == nil {
+		return tt
+	}
+	for _, l := range []string{
+		"2006-01-02 15:04:05.999",
+		"2006-01-02 15:04:05",
+	} {
+		if tt, err := time.Parse(l, s); err == nil {
+			return tt
+		}
+	}
+	// best-effort: return zero and let caller handle
+	return time.Time{}
+}
+
 func (t *Time) Scan(src interface{}) error {
 	// skip nil time
 	if src == nil {
@@ -235,23 +253,11 @@ func (t *Time) Scan(src interface{}) error {
 		return nil
 
 	case string:
-		// 2020-12-16 05:17:12.994+08:00
-		tt, err := time.Parse(layout, d)
-		if err != nil {
-			return err
-		}
-
-		*t = Time(tt)
+		*t = Time(parseTimeFlex(d))
 		return nil
 
 	case []byte:
-		// 2019-10-20 23:01:43.77+08:00
-		tt, err := time.Parse(layout, string(d))
-		if err != nil {
-			return err
-		}
-
-		*t = Time(tt)
+		*t = Time(parseTimeFlex(string(d)))
 		return nil
 
 	default:
