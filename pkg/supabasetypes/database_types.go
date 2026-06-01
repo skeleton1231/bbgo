@@ -279,33 +279,6 @@ type PublicBacktestReportsUpdate struct {
   WinRate      *string     `json:"win_rate"`
 }
 
-type PublicUserContainersSelect struct {
-  CreatedAt  string      `json:"created_at"`
-  Mode       string      `json:"mode"`
-  Status     string      `json:"status"`
-  Strategies interface{} `json:"strategies"`
-  UpdatedAt  string      `json:"updated_at"`
-  UserId     string      `json:"user_id"`
-}
-
-type PublicUserContainersInsert struct {
-  CreatedAt  *string     `json:"created_at"`
-  Mode       *string     `json:"mode"`
-  Status     *string     `json:"status"`
-  Strategies interface{} `json:"strategies"`
-  UpdatedAt  *string     `json:"updated_at"`
-  UserId     string      `json:"user_id"`
-}
-
-type PublicUserContainersUpdate struct {
-  CreatedAt  *string     `json:"created_at"`
-  Mode       *string     `json:"mode"`
-  Status     *string     `json:"status"`
-  Strategies interface{} `json:"strategies"`
-  UpdatedAt  *string     `json:"updated_at"`
-  UserId     *string     `json:"user_id"`
-}
-
 type PublicPositionsSelect struct {
   AverageCost        string  `json:"average_cost"`
   Base               string  `json:"base"`
