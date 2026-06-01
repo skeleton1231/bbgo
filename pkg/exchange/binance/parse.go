@@ -503,7 +503,11 @@ func parseWebSocketEvent(message []byte) (interface{}, error) {
 	default:
 		id := val.GetInt("id")
 		if id > 0 {
-			return &ResultEvent{ID: id}, nil
+			var event ResultEvent
+			if err2 := json.Unmarshal(message, &event); err2 != nil {
+				return nil, fmt.Errorf("failed to unmarshal response message: %w, message: %s", err2, message)
+			}
+			return &event, nil
 		}
 	}
 

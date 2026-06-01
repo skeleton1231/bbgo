@@ -54,7 +54,7 @@ const TestNetFuturesBaseURL = "https://testnet.binancefuture.com"
 // DEPRECATED (2025-10-06): listenKey via wss://stream.binance.com:9443 will be removed
 // Official recommendation is to use ws-api for user data stream or new listenToken subscription method
 const WsSpotWebSocketURL = "wss://ws-api.binance.com:443/ws-api/v3"
-const WsTestNetWebSocketURL = "wss://testnet.binance.vision/ws-api/v3"
+const WsTestNetWebSocketURL = "wss://ws-api.testnet.binance.vision/ws-api/v3"
 
 const WsFuturesWebSocketURL = "wss://ws-fapi.binance.com/ws-fapi/v1"
 const WsTestNetFuturesWebSocketURL = "wss://testnet.binancefuture.com/ws-fapi/v1"

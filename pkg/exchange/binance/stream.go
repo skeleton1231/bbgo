@@ -2,6 +2,8 @@ package binance
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"fmt"
 	"net"
 	"net/url"
@@ -61,6 +63,12 @@ type LogonParams struct {
 
 type ListenTokenSubscribeParams struct {
 	ListenToken string `json:"listenToken"`
+}
+
+type SubscribeSignatureParams struct {
+	APIKey    string `json:"apiKey"`
+	Timestamp int64  `json:"timestamp"`
+	Signature string `json:"signature"`
 }
 
 type RiskBalance struct {
@@ -290,21 +298,24 @@ func (s *Stream) handleConnect() {
 			}
 		}
 	} else if s.canUseWsApiEndpoint() {
+		if s.ed25519authentication.usingEd25519 {
+			if err := s.sendEd25519LoginCommand(); err != nil {
+				log.WithError(err).Error("ed25519 auth error")
+			}
+			time.Sleep(1 * time.Second)
 
-		if err := s.sendEd25519LoginCommand(); err != nil {
-			log.WithError(err).Error("ed25519 auth error")
-		}
-
-		time.Sleep(1 * time.Second)
-
-		// futures does not support ed25519 login on WsApi
-		if !s.exchange.IsFutures {
-			if err := s.sendSubscribeUserDataStreamCommand(); err != nil {
-				log.WithError(err).Error("subscribe user data stream error")
+			if !s.exchange.IsFutures {
+				if err := s.sendSubscribeUserDataStreamCommand(); err != nil {
+					log.WithError(err).Error("subscribe user data stream error")
+				}
+			}
+		} else {
+			// HMAC key: use userDataStream.subscribe.signature (no session.logon needed)
+			if err := s.sendSubscribeUserDataStreamSignatureCommand(); err != nil {
+				log.WithError(err).Error("subscribe user data stream (signature) error")
 			}
 		}
 
-		// TODO: ensure that we receive an authorized event to trigger this auth event
 		go s.EmitAuth()
 	} else if !s.exchange.useListenKey && s.exchange.IsMargin {
 		// Skip subscription if listenToken is missing or expired
@@ -372,6 +383,26 @@ func (s *Stream) sendSubscribeUserDataStreamCommand() error {
 	return s.Conn.WriteJSON(&WebSocketCommand{
 		ID:     2,
 		Method: "userDataStream.subscribe",
+	})
+}
+
+func (s *Stream) sendSubscribeUserDataStreamSignatureCommand() error {
+	timestamp := time.Now().UnixMilli()
+	params := url.Values{}
+	params.Add("apiKey", s.client.APIKey)
+	params.Add("timestamp", strconv.FormatInt(timestamp, 10))
+	paramsStr := params.Encode()
+	mac := hmac.New(sha256.New, []byte(s.exchange.secret))
+	mac.Write([]byte(paramsStr))
+	signature := fmt.Sprintf("%x", mac.Sum(nil))
+	return s.Conn.WriteJSON(&WebSocketCommand{
+		ID:     2,
+		Method: "userDataStream.subscribe.signature",
+		Params: &SubscribeSignatureParams{
+			APIKey:    s.client.APIKey,
+			Timestamp: timestamp,
+			Signature: signature,
+		},
 	})
 }
 
@@ -617,15 +648,14 @@ func (s *Stream) getUserDataStreamEndpointUrl(listenKey string) string {
 	return u + "/" + listenKey
 }
 
-// canUseWsApiEndpoint returns true if the stream should use ed25519 authentication with the new ws api endpoint
-// only the new spot trading websocket endpoint supports ed25519 authentication
+// canUseWsApiEndpoint returns true if the stream should use the WebSocket API endpoint
+// for user data stream subscription. Both Ed25519 and HMAC keys are supported on spot.
 func (s *Stream) canUseWsApiEndpoint() bool {
-	// margin and futures don't support ed25519 authentication
 	if s.exchange.MarginSettings.IsMargin || s.exchange.FuturesSettings.IsFutures {
 		return false
 	}
 
-	return s.ed25519authentication.usingEd25519
+	return true
 }
 
 func (s *Stream) createEndpoint(ctx context.Context) (string, error) {
@@ -747,6 +777,14 @@ func (s *Stream) dispatchEvent(e interface{}) {
 
 	case *ForceOrderEvent:
 		s.EmitForceOrderEvent(e)
+
+	case *ResultEvent:
+		if e.Error != nil {
+			log.Errorf("WebSocket API response error: id=%d status=%d code=%d msg=%s", e.ID, e.Status, e.Error.Code, e.Error.Message)
+		} else {
+			log.Infof("WebSocket API response: id=%d status=%d result=%+v", e.ID, e.Status, e.Result)
+		}
+
 	case *AlgoOrderUpdateEvent:
 		s.EmitAlgoOrderUpdateEvent(e)
 
