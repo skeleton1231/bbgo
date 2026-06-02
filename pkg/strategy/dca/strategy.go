@@ -145,7 +145,7 @@ func (s *Strategy) Run(ctx context.Context, _ bbgo.OrderExecutor, session *bbgo.
 		}
 
 		// check if we have quota
-		if s.BudgetQuota.Compare(s.budgetPerInvestment) <= 0 {
+		if s.BudgetQuota.Compare(s.budgetPerInvestment) < 0 {
 			return
 		}
 
