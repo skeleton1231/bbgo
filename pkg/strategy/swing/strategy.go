@@ -78,6 +78,10 @@ func (s *Strategy) ID() string {
 	return ID
 }
 
+func (s *Strategy) InstanceID() string {
+	return fmt.Sprintf("%s:%s:%s", ID, s.Symbol, s.Interval)
+}
+
 func (s *Strategy) Validate() error {
 	// Market fields are populated by injection after validation, so we skip Market.Validate() here.
 	return nil

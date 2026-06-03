@@ -84,6 +84,10 @@ func (s *Strategy) ID() string {
 	return ID
 }
 
+func (s *Strategy) InstanceID() string {
+	return fmt.Sprintf("%s:%s:%s", ID, s.Symbol, s.Interval)
+}
+
 func (s *Strategy) Validate() error {
 	if s.ProfitSpread.Sign() <= 0 {
 		// If profitSpread is empty or its value is negative

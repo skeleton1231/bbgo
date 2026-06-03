@@ -3,6 +3,7 @@ package techsignal
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -61,6 +62,10 @@ type Strategy struct {
 
 func (s *Strategy) ID() string {
 	return ID
+}
+
+func (s *Strategy) InstanceID() string {
+	return fmt.Sprintf("%s:%s", ID, s.Symbol)
 }
 
 func (s *Strategy) Subscribe(session *bbgo.ExchangeSession) {

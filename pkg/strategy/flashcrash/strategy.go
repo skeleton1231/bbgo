@@ -4,6 +4,7 @@ package flashcrash
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	log "github.com/sirupsen/logrus"
@@ -55,6 +56,10 @@ type Strategy struct {
 
 func (s *Strategy) ID() string {
 	return ID
+}
+
+func (s *Strategy) InstanceID() string {
+	return fmt.Sprintf("%s:%s:%s", ID, s.Symbol, s.Interval)
 }
 
 func (s *Strategy) Validate() error {

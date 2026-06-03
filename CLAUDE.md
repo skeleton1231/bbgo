@@ -6,6 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 BBGO is a Go-based cryptocurrency trading framework supporting 8 exchanges (Binance, OKEx, KuCoin, MAX, Bitget, Bybit, Coinbase, Bitfinex) with 40+ built-in strategies, backtesting, and a web dashboard.
 
+This repo (`skeleton1231/bbgo`, forked from [c9s/bbgo](https://github.com/c9s/bbgo)) is the upstream for the **SaaS deployment** (`saas/` directory). Key SaaS-specific additions:
+
+- **Supabase direct write** (`DB_DRIVER=supabase`) — orders/trades/positions/profits written to Supabase via REST API
+- **gRPC market data service** — shared `MarketDataService` with 3-layer kline cache (memory → SQLite → API)
+- **Backtest isolation** — per-job config/database to prevent concurrent overwrite
+- **Strategy hardening** — defaults, validation, and nil guards for backtest-crashing strategies
+
 Module path: `github.com/c9s/bbgo`
 
 ## Build Commands
@@ -118,16 +125,19 @@ CLI (cmd/bbgo → pkg/cmd)
 
 ### Key Packages
 
-- **`pkg/bbgo/`** — Core engine: Environment, Trader, Config, strategy registry (`bbgo.RegisterStrategy()`), OrderExecutor, ExchangeSession
-- **`pkg/types/`** — Shared types: Exchange interface, Order, Trade, KLine, Balance, Stream, fixedpoint
-- **`pkg/exchange/`** — Exchange adapters (REST + WebSocket); factory in `factory.go`. Each exchange has its own sub-package (e.g., `pkg/exchange/binance/`)
-- **`pkg/strategy/`** — Built-in strategies (grid2, xmaker, bollmaker, supertrend, etc.)
-- **`pkg/indicator/`** — Technical indicators (SMA, EMA, MACD, RSI, Bollinger, etc.) with a pandas.Series-like interface
-- **`pkg/service/`** — Persistence and business logic (database, backtest, orders, trades). Includes `supabase_client.go` for direct Supabase writes when `DB_DRIVER=supabase`.
-- **`pkg/supabasetypes/`** — Auto-generated Go types for Supabase tables (regenerated via `pnpm sb go-types` from `saas/web/`)
-- **`pkg/core/`** — TradeCollector, order store, KLine driver
-- **`pkg/backtest/`** — Backtesting engine
-- **`pkg/server/`** — HTTP API and web dashboard server
+| Package | Purpose |
+|---------|---------|
+| `pkg/bbgo/` | Core engine: Environment, Trader, Config, strategy registry, OrderExecutor, ExchangeSession |
+| `pkg/types/` | Shared types: Exchange interface, Order, Trade, KLine, Balance, Stream, fixedpoint |
+| `pkg/exchange/` | Exchange adapters (REST + WebSocket); factory in `factory.go`. Each exchange has its own sub-package |
+| `pkg/strategy/` | Built-in strategies (grid2, xmaker, bollmaker, supertrend, etc.) |
+| `pkg/indicator/` | Technical indicators (SMA, EMA, MACD, RSI, Bollinger, etc.) |
+| `pkg/service/` | Persistence and business logic (database, backtest, orders, trades). Includes `supabase_client.go` |
+| `pkg/supabasetypes/` | Auto-generated Go types for Supabase tables (regenerated via `pnpm sb go-types`) |
+| `pkg/core/` | TradeCollector, order store, KLine driver |
+| `pkg/backtest/` | Backtesting engine |
+| `pkg/server/` | HTTP API and web dashboard server |
+| `pkg/pb/` | gRPC protobuf definitions + query extensions for market data service |
 
 ### Key Interfaces
 
@@ -202,3 +212,14 @@ When adding a new strategy to the SaaS:
 ## Build Tag Constraints
 
 Some code and tests use `//go:build dnum` or `//go:build !dnum` to conditionally compile between standard `float64` and high-precision `dnum` decimal math. When adding dnum-specific code paths, mirror the build constraints in tests.
+
+## SaaS Deployment
+
+The `saas/` directory contains the multi-tenant deployment layer. See `saas/CLAUDE.md` for full architecture, build commands, and API documentation. Key components:
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| Manager | `saas/manager/` | Go HTTP server for container orchestration, data sync, backtests |
+| Web | `saas/web/` | Next.js 16 dashboard frontend |
+| Docker | `saas/docker/` | Dockerfiles and docker-compose for backend services |
+| Migrations | `saas/web/supabase/migrations/` | Supabase schema migrations |
