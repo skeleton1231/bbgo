@@ -26,6 +26,7 @@ import (
 	exchange2 "github.com/c9s/bbgo/pkg/exchange"
 	"github.com/c9s/bbgo/pkg/fixedpoint"
 	"github.com/c9s/bbgo/pkg/types"
+	"github.com/c9s/bbgo/pkg/util"
 )
 
 const defaultMaxSessionTradeBufferSize = 3500
@@ -183,6 +184,10 @@ type ExchangeSessionConfig struct {
 
 	UseHeikinAshi bool `json:"heikinAshi,omitempty" yaml:"heikinAshi,omitempty"`
 
+	// PaperBalances defines the initial virtual balances for paper trading mode.
+	// Format: map of currency -> amount, e.g. {"USDT": 10000, "BTC": 0.5}
+	PaperBalances map[string]fixedpoint.Value `json:"paperBalances,omitempty" yaml:"paperBalances,omitempty"`
+
 	Maintenance *MaintenanceConfig `json:"maintenance,omitempty" yaml:"maintenance,omitempty"`
 }
 
@@ -234,6 +239,8 @@ type ExchangeSession struct {
 	Exchange types.Exchange `json:"-" yaml:"-"`
 
 	marginInfoUpdater *MarginInfoUpdater
+
+	paperTradeExchange *PaperTradeExchange
 
 	// Trades collects the executed trades from the exchange
 	// map: symbol -> []trade
@@ -667,6 +674,12 @@ func (session *ExchangeSession) Init(ctx context.Context, environ *Environment) 
 		})
 	}
 
+		// Feed klines to paper trade matching engine
+		if session.paperTradeExchange != nil {
+			session.MarketDataStream.OnKLineClosed(func(kline types.KLine) {
+				session.paperTradeExchange.OnKLineClosed(kline)
+			})
+		}
 	session.MarketDataStream.OnMarketTrade(func(trade types.Trade) {
 		session.setLastPrice(trade.Symbol, trade.Price)
 	})
@@ -773,6 +786,11 @@ func (session *ExchangeSession) initSymbol(ctx context.Context, environ *Environ
 	if _, ok := session.standardIndicatorSets[symbol]; !ok {
 		standardIndicatorSet := NewStandardIndicatorSet(symbol, session.MarketDataStream, marketDataStore)
 		session.standardIndicatorSets[symbol] = standardIndicatorSet
+	}
+
+	// Paper mode: always subscribe to klines so the matching engine receives price data
+	if session.paperTradeExchange != nil {
+		session.Subscribe(types.KLineChannel, symbol, types.SubscribeOptions{Interval: types.Interval1m})
 	}
 
 	// used kline intervals by the given symbol
@@ -1199,6 +1217,37 @@ func (session *ExchangeSession) InitExchange(name string, ex types.Exchange) err
 
 	session.Name = name
 	session.Exchange = ex
+
+	// Wrap with paper trade exchange if PAPER_TRADE mode is enabled
+	if session.PublicOnly && util.IsPaperTrade() {
+		markets, err := cache.LoadExchangeMarketsWithCache(context.Background(), ex)
+		if err != nil {
+			return fmt.Errorf("failed to load markets for paper trade: %w", err)
+		}
+
+		balances := make(types.BalanceMap)
+		for currency, amount := range session.PaperBalances {
+			balances[currency] = types.Balance{
+				Currency:  currency,
+				Available: amount,
+				Locked:    fixedpoint.Zero,
+			}
+		}
+		if len(balances) == 0 {
+			balances["USDT"] = types.Balance{
+				Currency:  "USDT",
+				Available: fixedpoint.NewFromFloat(10000),
+				Locked:    fixedpoint.Zero,
+			}
+		}
+
+		paperEx := NewPaperTradeExchange(ex, markets, balances)
+		session.Exchange = paperEx
+		session.paperTradeExchange = paperEx
+
+		log.Infof("paper trade mode: using virtual exchange with balances: %v", balances)
+	}
+
 	session.UserDataStream = ex.NewStream()
 	session.MarketDataStream = ex.NewStream()
 	session.MarketDataStream.SetPublicOnly()
@@ -1214,6 +1263,9 @@ func (session *ExchangeSession) InitExchange(name string, ex types.Exchange) err
 	// pointer fields
 	session.Subscriptions = make(map[types.Subscription]types.Subscription)
 	session.Account = types.NewAccount()
+	if session.paperTradeExchange != nil {
+		session.Account.UpdateBalances(session.paperTradeExchange.account.Balances())
+	}
 	session.Trades = make(map[string]*types.TradeSlice)
 
 	session.markets = make(map[string]types.Market)

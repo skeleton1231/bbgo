@@ -560,6 +560,15 @@ func (environ *Environment) Connect(ctx context.Context) error {
 			if err := session.UserDataStream.Connect(ctx); err != nil {
 				return err
 			}
+		} else if util.IsPaperTrade() {
+			logger.Infof("paper mode: simulating user data stream auth for %s", session.Name)
+			if emitter, ok := session.UserDataStream.(types.StandardStreamEmitter); ok {
+				if session.paperTradeExchange != nil {
+					session.paperTradeExchange.BindUserData(emitter)
+					emitter.EmitBalanceSnapshot(session.paperTradeExchange.account.Balances())
+				}
+				go emitter.EmitAuth()
+			}
 		}
 	}
 

@@ -154,10 +154,6 @@ type Exchange struct {
 var timeSetterOnce sync.Once
 
 func New(key, secret string, args ...string) *Exchange {
-	if util.IsPaperTrade() {
-		binance.UseTestnet = true
-	}
-
 	ed25519PKeyPEM := os.Getenv("BINANCE_API_PRIVATE_KEY")
 	if len(args) > 0 && len(args[0]) > 0 {
 		// override the global private key with args[0] is provided
