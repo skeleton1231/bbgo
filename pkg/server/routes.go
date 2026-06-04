@@ -105,38 +105,8 @@ func (s *Server) newEngine(ctx context.Context) *gin.Engine {
 		})
 	})
 
-	r.GET("/api/trades", func(c *gin.Context) {
-		if s.Environ.TradeService == nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "database is not configured"})
-			return
-		}
-
-		exchange := c.Query("exchange")
-		symbol := c.Query("symbol")
-		gidStr := c.DefaultQuery("gid", "0")
-		lastGID, err := strconv.ParseInt(gidStr, 10, 64)
-		if err != nil {
-			logrus.WithError(err).Error("last gid parse error")
-			c.Status(http.StatusBadRequest)
-			return
-		}
-
-		trades, err := s.Environ.TradeService.Query(service.QueryTradesOptions{
-			Exchange: types.ExchangeName(exchange),
-			Symbol:   symbol,
-			LastGID:  lastGID,
-			Ordering: "DESC",
-		})
-		if err != nil {
-			c.Status(http.StatusBadRequest)
-			logrus.WithError(err).Error("order query error")
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"trades": trades,
-		})
-	})
+	r.GET("/api/trades", s.listTrades)
+	r.GET("/api/trades/position-summary", s.tradePositionSummary)
 
 	r.GET("/api/orders/closed", s.listClosedOrders)
 	r.GET("/api/trading-volume", s.tradingVolume)
@@ -279,6 +249,115 @@ func (s *Server) ping(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "pong"})
 }
 
+
+func parseTradeQueryOptions(c *gin.Context) (service.QueryTradesOptions, bool) {
+	if s, ok := c.Get("server"); ok {
+		_ = s
+	}
+	exchange := c.Query("exchange")
+	symbol := c.Query("symbol")
+	gidStr := c.DefaultQuery("gid", "0")
+	lastGID, err := strconv.ParseInt(gidStr, 10, 64)
+	if err != nil {
+		logrus.WithError(err).Error("last gid parse error")
+		c.Status(http.StatusBadRequest)
+		return service.QueryTradesOptions{}, false
+	}
+
+	opts := service.QueryTradesOptions{
+		Exchange: types.ExchangeName(exchange),
+		Symbol:   symbol,
+		LastGID:  lastGID,
+		Ordering: "DESC",
+		Limit:    500,
+	}
+
+	if ordering := c.Query("ordering"); ordering != "" {
+		opts.Ordering = ordering
+	}
+	if limitStr := c.Query("limit"); limitStr != "" {
+		if limit, err := strconv.ParseUint(limitStr, 10, 64); err == nil && limit > 0 {
+			opts.Limit = limit
+		}
+	}
+	if since := c.Query("since"); since != "" {
+		t, err := time.Parse(time.RFC3339, since)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid since format, use RFC3339"})
+			return service.QueryTradesOptions{}, false
+		}
+		opts.Since = &t
+	}
+	if until := c.Query("until"); until != "" {
+		t, err := time.Parse(time.RFC3339, until)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid until format, use RFC3339"})
+			return service.QueryTradesOptions{}, false
+		}
+		opts.Until = &t
+	}
+	return opts, true
+}
+
+func (s *Server) listTrades(c *gin.Context) {
+	if s.Environ.TradeService == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "database is not configured"})
+		return
+	}
+
+	opts, ok := parseTradeQueryOptions(c)
+	if !ok {
+		return
+	}
+
+	trades, err := s.Environ.TradeService.Query(opts)
+	if err != nil {
+		c.Status(http.StatusBadRequest)
+		logrus.WithError(err).Error("trade query error")
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"trades": trades,
+	})
+}
+
+func (s *Server) tradePositionSummary(c *gin.Context) {
+	if s.Environ.TradeService == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "database is not configured"})
+		return
+	}
+
+	exchange := c.Query("exchange")
+	symbol := c.Query("symbol")
+
+	opts := service.QueryTradesOptions{
+		Exchange: types.ExchangeName(exchange),
+		Symbol:   symbol,
+	}
+
+	if before := c.Query("before"); before != "" {
+		t, err := time.Parse(time.RFC3339, before)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid before format, use RFC3339"})
+			return
+		}
+		opts.Until = &t
+	}
+
+	netPos, err := s.Environ.TradeService.NetPosition(opts)
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		logrus.WithError(err).Error("position summary query error")
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"netPosition": netPos,
+		"symbol":      symbol,
+	})
+}
+
 func (s *Server) listClosedOrders(c *gin.Context) {
 	if s.Environ.OrderService == nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "database is not configured"})
@@ -296,12 +375,17 @@ func (s *Server) listClosedOrders(c *gin.Context) {
 		return
 	}
 
-	orders, err := s.Environ.OrderService.Query(service.QueryOrdersOptions{
+	opts := service.QueryOrdersOptions{
 		Exchange: types.ExchangeName(exchange),
 		Symbol:   symbol,
 		LastGID:  lastGID,
 		Ordering: "DESC",
-	})
+	}
+	if ordering := c.Query("ordering"); ordering != "" {
+		opts.Ordering = ordering
+	}
+
+	orders, err := s.Environ.OrderService.Query(opts)
 	if err != nil {
 		c.Status(http.StatusBadRequest)
 		logrus.WithError(err).Error("order query error")

@@ -397,6 +397,52 @@ func (s *TradeService) Query(options QueryTradesOptions) ([]types.Trade, error) 
 	return s.scanRows(rows)
 }
 
+
+// NetPosition returns the net position (total buy quantity - total sell quantity)
+// for trades matching the given options. When opts.Until is set, only trades before
+// that time are included.
+func (s *TradeService) NetPosition(opts QueryTradesOptions) (float64, error) {
+	if s.Supabase != nil {
+		return s.Supabase.NetPosition(opts)
+	}
+
+	castExpr := "CAST(quantity AS REAL)"
+	if s.DB.DriverName() != "sqlite3" {
+		castExpr = "CAST(quantity AS DECIMAL(30,18))"
+	}
+
+	netExpr := fmt.Sprintf(
+		"COALESCE(SUM(CASE WHEN side = 'BUY' THEN %s ELSE -%s END), 0)",
+		castExpr, castExpr,
+	)
+
+	sel := sq.Select(netExpr).From("trades")
+
+	if opts.Exchange != "" {
+		sel = sel.Where(sq.Eq{"exchange": opts.Exchange})
+	}
+	if opts.Symbol != "" {
+		sel = sel.Where(sq.Eq{"symbol": opts.Symbol})
+	}
+	if opts.Until != nil {
+		sel = sel.Where(sq.Lt{"traded_at": opts.Until})
+	}
+	if opts.Since != nil {
+		sel = sel.Where(sq.GtOrEq{"traded_at": opts.Since})
+	}
+
+	sqlStr, args, err := sel.ToSql()
+	if err != nil {
+		return 0, err
+	}
+
+	var net float64
+	if err := s.DB.QueryRow(sqlStr, args...).Scan(&net); err != nil {
+		return 0, err
+	}
+	return net, nil
+}
+
 func (s *TradeService) Load(ctx context.Context, id int64) (*types.Trade, error) {
 	if s.Supabase != nil {
 		return s.Supabase.LoadTrade(id)

@@ -576,6 +576,49 @@ func derefStr(s *string) string {
 	return *s
 }
 
+// NetPosition returns the net position for trades matching the given options.
+func (s *SupabaseService) NetPosition(opts QueryTradesOptions) (float64, error) {
+	q := s.client.From("trades").Select("side,quantity", "", false).
+		Eq("user_id", s.userID)
+
+	if opts.Exchange != "" {
+		q = q.Eq("exchange", string(opts.Exchange))
+	}
+	if opts.Symbol != "" {
+		q = q.Eq("symbol", opts.Symbol)
+	}
+	if opts.Until != nil {
+		q = q.Lt("traded_at", opts.Until.Format(time.RFC3339Nano))
+	}
+	if opts.Since != nil {
+		q = q.Gte("traded_at", opts.Since.Format(time.RFC3339Nano))
+	}
+
+	result, _, err := q.Execute()
+	if err != nil {
+		return 0, fmt.Errorf("supabase net position: %w", err)
+	}
+
+	var rows []struct {
+		Side     string `json:"side"`
+		Quantity string `json:"quantity"`
+	}
+	if err := json.Unmarshal(result, &rows); err != nil {
+		return 0, fmt.Errorf("supabase unmarshal net position: %w", err)
+	}
+
+	var net float64
+	for _, r := range rows {
+		qty, _ := strconv.ParseFloat(r.Quantity, 64)
+		if r.Side == "BUY" {
+			net += qty
+		} else {
+			net -= qty
+		}
+	}
+	return net, nil
+}
+
 func ptrStr(s string) *string  { return &s }
 func ptrBool(b bool) *bool     { return &b }
 func ptrInt64(n int64) *int64  { return &n }
