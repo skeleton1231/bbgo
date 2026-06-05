@@ -412,6 +412,16 @@ func (session *ExchangeSession) GetAccount() (a *types.Account) {
 	return a
 }
 
+// EffectiveBalances returns the balances from the paper trade exchange account
+// when available (since callbacks may not propagate fills to session.Account),
+// otherwise falls back to the session's own account.
+func (session *ExchangeSession) EffectiveBalances() types.BalanceMap {
+	if session.paperTradeExchange != nil {
+		return session.paperTradeExchange.account.Balances()
+	}
+	return session.GetAccount().Balances()
+}
+
 func (session *ExchangeSession) GetIsolatedSymbol() string {
 	isolatedSymbol := ""
 	if session.IsolatedMarginSymbol != "" {

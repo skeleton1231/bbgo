@@ -33,6 +33,16 @@ func nextPaperTradeID() uint64 {
 
 const paperTradeFeeRate = 0.001
 
+// isPaperLimitTaker checks if a limit order would immediately match on a real exchange.
+// Buy limit at or above market price, or sell limit at or below market price → taker.
+func isPaperLimitTaker(o types.SubmitOrder, currentPrice fixedpoint.Value) bool {
+	if currentPrice.IsZero() || o.Type != types.OrderTypeLimit {
+		return false
+	}
+	return (o.Side == types.SideTypeBuy && o.Price.Compare(currentPrice) >= 0) ||
+		(o.Side == types.SideTypeSell && o.Price.Compare(currentPrice) <= 0)
+}
+
 // paperMatchingBook implements kline-driven order matching for paper trading,
 // adapted from backtest.SimplePriceMatching.
 type paperMatchingBook struct {
@@ -159,7 +169,11 @@ func (m *paperMatchingBook) buyToPrice(price fixedpoint.Value) []paperFill {
 	var remainingAsk []types.Order
 	for _, o := range m.askOrders {
 		if o.Type == types.OrderTypeLimit && price.Compare(o.Price) >= 0 {
-			fills = append(fills, m.buildFillLocked(o, o.Price))
+			fillPrice := o.Price
+			if o.Price.Compare(m.lastPrice) < 0 {
+				fillPrice = m.lastPrice
+			}
+			fills = append(fills, m.buildFillLocked(o, fillPrice))
 		} else {
 			remainingAsk = append(remainingAsk, o)
 		}
@@ -178,7 +192,11 @@ func (m *paperMatchingBook) sellToPrice(price fixedpoint.Value) []paperFill {
 	var remainingBid []types.Order
 	for _, o := range m.bidOrders {
 		if o.Type == types.OrderTypeLimit && price.Compare(o.Price) <= 0 {
-			fills = append(fills, m.buildFillLocked(o, o.Price))
+			fillPrice := o.Price
+			if o.Price.Compare(m.lastPrice) > 0 {
+				fillPrice = m.lastPrice
+			}
+			fills = append(fills, m.buildFillLocked(o, fillPrice))
 		} else {
 			remainingBid = append(remainingBid, o)
 		}
@@ -469,17 +487,39 @@ func (e *PaperTradeExchange) SubmitOrder(ctx context.Context, submit types.Submi
 	matching.EmitBalanceUpdate(e.account.Balances())
 	matching.EmitOrderUpdate(order)
 
-		// Market orders fill immediately
-		if submit.Type == types.OrderTypeMarket {
-			matching.mu.Lock()
-			fill := matching.buildFillLocked(order, price)
-			matching.mu.Unlock()
-			matching.emitFills([]paperFill{fill})
-			return &order, nil
+	// Market orders and taker limit orders fill immediately at market price
+	isTaker := submit.Type == types.OrderTypeMarket || isPaperLimitTaker(submit, matching.LastPrice())
+	if isTaker {
+		fillPrice := price
+		if submit.Type == types.OrderTypeLimit && !matching.LastPrice().IsZero() {
+			fillPrice = market.TruncatePrice(matching.LastPrice())
 		}
 
+		matching.mu.Lock()
+		fill := matching.buildFillLocked(order, fillPrice)
+		matching.mu.Unlock()
 
-	// Limit orders go into the book
+		// For taker limit orders, refund the difference between locked and used
+		if submit.Type == types.OrderTypeLimit {
+			switch submit.Side {
+			case types.SideTypeBuy:
+				refund := price.Sub(fillPrice).Mul(submit.Quantity)
+				if refund.Sign() > 0 {
+					e.account.UnlockBalance(market.QuoteCurrency, refund)
+				}
+			case types.SideTypeSell:
+				refund := fillPrice.Sub(price).Mul(submit.Quantity)
+				if refund.Sign() > 0 {
+					e.account.AddBalance(market.QuoteCurrency, refund)
+				}
+			}
+		}
+
+		matching.emitFills([]paperFill{fill})
+		return &order, nil
+	}
+
+	// Limit maker orders go into the book
 	matching.mu.Lock()
 	switch submit.Side {
 	case types.SideTypeBuy:

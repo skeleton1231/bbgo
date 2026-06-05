@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"reflect"
 	"regexp"
 	"strconv"
 	"time"
@@ -403,21 +404,36 @@ func (s *Server) listStrategies(c *gin.Context) {
 	var stashes []map[string]interface{}
 
 	for _, mount := range s.Config.ExchangeStrategies {
-		stash, err := mount.Map()
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-
-		stash["strategy"] = mount.Strategy.ID()
-
+		strategyID := mount.Strategy.ID()
+		instanceID := strategyID
 		type instanceIDER interface{ InstanceID() string }
 		if iid, ok := mount.Strategy.(instanceIDER); ok {
-			stash["strategyInstanceID"] = iid.InstanceID()
-		} else {
-			stash["strategyInstanceID"] = mount.Strategy.ID()
+			instanceID = iid.InstanceID()
 		}
 
+		stash, err := mount.Map()
+		if err != nil {
+			fallback := map[string]interface{}{
+				"strategy":           strategyID,
+				"strategyInstanceID": instanceID,
+				"on":                 mount.Mounts,
+			}
+			strategyFields := map[string]interface{}{"error": err.Error()}
+			v := reflect.ValueOf(mount.Strategy)
+			if v.Kind() == reflect.Ptr {
+				v = v.Elem()
+			}
+			if f := v.FieldByName("Symbol"); f.IsValid() && f.Kind() == reflect.String {
+				fallback["symbol"] = f.String()
+				strategyFields["symbol"] = f.String()
+			}
+			fallback[strategyID] = strategyFields
+			stashes = append(stashes, fallback)
+			continue
+		}
+
+		stash["strategy"] = strategyID
+		stash["strategyInstanceID"] = instanceID
 		stashes = append(stashes, stash)
 	}
 
@@ -494,7 +510,7 @@ func (s *Server) getSessionAccountBalance(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"balances": session.GetAccount().Balances()})
+	c.JSON(http.StatusOK, gin.H{"balances": session.EffectiveBalances()})
 }
 
 func enrichOrdersWithStrategy(session *bbgo.ExchangeSession, orders []types.Order) {
@@ -581,7 +597,7 @@ func (s *Server) listAssets(c *gin.Context) {
 
 	totalAssets := asset.Map{}
 	for _, session := range s.Environ.Sessions() {
-		balances := session.GetAccount().Balances()
+		balances := session.EffectiveBalances()
 
 		if err := session.UpdatePrices(c, balances.Currencies(), "USDT"); err != nil {
 			logrus.WithError(err).Error("price update failed")
