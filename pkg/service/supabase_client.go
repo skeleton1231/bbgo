@@ -217,6 +217,9 @@ func (s *SupabaseService) QueryTrades(options QueryTradesOptions) ([]types.Trade
 	if options.IsIsolated != nil {
 		q = q.Eq("is_isolated", strconv.FormatBool(*options.IsIsolated))
 	}
+	if options.Strategy != "" {
+		q = q.Eq("strategy", options.Strategy)
+	}
 
 	ordering := strings.ToUpper(options.Ordering)
 	if ordering == "" {
@@ -586,6 +589,9 @@ func (s *SupabaseService) NetPosition(opts QueryTradesOptions) (float64, error) 
 	}
 	if opts.Symbol != "" {
 		q = q.Eq("symbol", opts.Symbol)
+	}
+	if opts.Strategy != "" {
+		q = q.Eq("strategy", opts.Strategy)
 	}
 	if opts.Until != nil {
 		q = q.Lt("traded_at", opts.Until.Format(time.RFC3339Nano))

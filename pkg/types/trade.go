@@ -2,6 +2,7 @@ package types
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -107,6 +108,27 @@ type Trade struct {
 	InsertedAt *Time `json:"insertedAt" db:"inserted_at"`
 
 	Tag string `json:"tags" db:"-"`
+}
+
+func (trade Trade) MarshalJSON() ([]byte, error) {
+	type Alias Trade
+	var strategyID *string
+	if trade.StrategyID.Valid {
+		strategyID = &trade.StrategyID.String
+	}
+	var pnl *float64
+	if trade.PnL.Valid {
+		pnl = &trade.PnL.Float64
+	}
+	return json.Marshal(&struct {
+		*Alias
+		StrategyID *string  `json:"strategyID"`
+		PnL        *float64 `json:"pnl"`
+	}{
+		Alias:      (*Alias)(&trade),
+		StrategyID: strategyID,
+		PnL:        pnl,
+	})
 }
 
 func (trade Trade) HasTag(tag string) bool {

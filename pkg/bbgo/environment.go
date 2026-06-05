@@ -501,6 +501,10 @@ func (environ *Environment) BindSync(config *SyncConfig) {
 	for _, session := range environ.sessions {
 		// avoid using the iterator variable.
 		s2 := session
+
+		// Inject TradeService so strategy-level callbacks can persist annotated trades.
+		s2.TradeService = environ.TradeService
+
 		// if trade sync is on, we will write all received trades
 		if config.UserDataStream.Trades {
 			tradeWriter := tradeWriterCreator(s2)

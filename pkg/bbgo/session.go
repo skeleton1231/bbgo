@@ -194,6 +194,12 @@ type ExchangeSessionConfig struct {
 // ExchangeSession presents the exchange connection Session
 // It also maintains and collects the data returned from the stream.
 //
+// TradeInserter is implemented by TradeService for persisting trades.
+type TradeInserter interface {
+	Insert(trade types.Trade) error
+	UpdateStrategy(trade types.Trade) error
+}
+
 //go:generate callbackgen -type ExchangeSession
 type ExchangeSession struct {
 	ExchangeSessionConfig `yaml:",inline"`
@@ -201,6 +207,12 @@ type ExchangeSession struct {
 	// ---------------------------
 	// Runtime fields
 	// ---------------------------
+
+	// TradeService is used by strategy-level callbacks to persist trades with strategy annotation.
+	TradeService TradeInserter `json:"-" yaml:"-"`
+
+	// orderStrategyIndex maps orderID to strategyInstanceID so the REST API can annotate open orders.
+	orderStrategyIndex sync.Map
 
 	// The exchange account states
 	Account      *types.Account `json:"-" yaml:"-"`
@@ -1474,6 +1486,25 @@ func (session *ExchangeSession) IsInMaintenance() bool {
 
 func (session *ExchangeSession) GetMarginInfoUpdater() *MarginInfoUpdater {
 	return session.marginInfoUpdater
+}
+
+// RegisterOrderStrategy records that an order belongs to a strategy instance.
+func (session *ExchangeSession) RegisterOrderStrategy(orderID uint64, strategyInstanceID string) {
+	session.orderStrategyIndex.Store(orderID, strategyInstanceID)
+}
+
+// LookupOrderStrategy returns the strategy instance ID for an order, if known.
+func (session *ExchangeSession) LookupOrderStrategy(orderID uint64) (string, bool) {
+	v, ok := session.orderStrategyIndex.Load(orderID)
+	if !ok {
+		return "", false
+	}
+	return v.(string), true
+}
+
+// RemoveOrderStrategy removes the mapping when an order reaches a terminal state.
+func (session *ExchangeSession) RemoveOrderStrategy(orderID uint64) {
+	session.orderStrategyIndex.Delete(orderID)
 }
 
 func (session *ExchangeSession) setLastPrice(symbol string, price fixedpoint.Value) {

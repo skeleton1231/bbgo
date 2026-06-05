@@ -431,3 +431,54 @@ type PublicProfitsUpdate struct {
   TradedAt           *string `json:"traded_at"`
   UserId             *string `json:"user_id"`
 }
+
+type PublicStrategyRegistrySelect struct {
+  Category      string      `json:"category"`
+  CreatedAt     *string     `json:"created_at"`
+  CrossExchange *bool       `json:"cross_exchange"`
+  Defaults      interface{} `json:"defaults"`
+  Description   *string     `json:"description"`
+  DisplayName   string      `json:"display_name"`
+  Enabled       *bool       `json:"enabled"`
+  Exchanges     interface{} `json:"exchanges"`
+  Fields        interface{} `json:"fields"`
+  Id            string      `json:"id"`
+  LiveOnly      *bool       `json:"live_only"`
+  SessionRoles  interface{} `json:"session_roles"`
+  SortOrder     *int32      `json:"sort_order"`
+  UpdatedAt     *string     `json:"updated_at"`
+}
+
+type PublicStrategyRegistryInsert struct {
+  Category      *string     `json:"category"`
+  CreatedAt     *string     `json:"created_at"`
+  CrossExchange *bool       `json:"cross_exchange"`
+  Defaults      interface{} `json:"defaults"`
+  Description   *string     `json:"description"`
+  DisplayName   string      `json:"display_name"`
+  Enabled       *bool       `json:"enabled"`
+  Exchanges     interface{} `json:"exchanges"`
+  Fields        interface{} `json:"fields"`
+  Id            string      `json:"id"`
+  LiveOnly      *bool       `json:"live_only"`
+  SessionRoles  interface{} `json:"session_roles"`
+  SortOrder     *int32      `json:"sort_order"`
+  UpdatedAt     *string     `json:"updated_at"`
+}
+
+type PublicStrategyRegistryUpdate struct {
+  Category      *string     `json:"category"`
+  CreatedAt     *string     `json:"created_at"`
+  CrossExchange *bool       `json:"cross_exchange"`
+  Defaults      interface{} `json:"defaults"`
+  Description   *string     `json:"description"`
+  DisplayName   *string     `json:"display_name"`
+  Enabled       *bool       `json:"enabled"`
+  Exchanges     interface{} `json:"exchanges"`
+  Fields        interface{} `json:"fields"`
+  Id            *string     `json:"id"`
+  LiveOnly      *bool       `json:"live_only"`
+  SessionRoles  interface{} `json:"session_roles"`
+  SortOrder     *int32      `json:"sort_order"`
+  UpdatedAt     *string     `json:"updated_at"`
+}

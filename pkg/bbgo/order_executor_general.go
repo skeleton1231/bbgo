@@ -168,6 +168,13 @@ func (e *GeneralOrderExecutor) Bind() {
 	e.activeMakerOrders.BindStream(e.session.UserDataStream)
 	e.orderStore.BindStream(e.session.UserDataStream)
 
+	// Clean up strategy index when orders reach terminal states.
+	removeFromIndex := func(o types.Order) {
+		e.session.RemoveOrderStrategy(o.OrderID)
+	}
+	e.activeMakerOrders.OnFilled(removeFromIndex)
+	e.activeMakerOrders.OnCanceled(removeFromIndex)
+
 	if !e.disableNotify {
 		// trade notify
 		e.tradeCollector.OnTrade(func(trade types.Trade, profit, netProfit fixedpoint.Value) {
@@ -176,6 +183,20 @@ func (e *GeneralOrderExecutor) Bind() {
 
 		e.tradeCollector.OnPositionUpdate(func(position *types.Position) {
 			Notify(position)
+		})
+	}
+
+	// Persist strategy-annotated trades (trade.StrategyID set by TradeCollector.applyTrade).
+	// Uses upsert so the first session-level write (without strategy) gets updated.
+	if e.session.TradeService != nil {
+		ts := e.session.TradeService
+		e.tradeCollector.OnTrade(func(trade types.Trade, profit, netPoint fixedpoint.Value) {
+			if !trade.StrategyID.Valid {
+				return
+			}
+			if err := ts.UpdateStrategy(trade); err != nil {
+				log.WithError(err).Errorf("strategy-level trade insert error: %+v", trade)
+			}
 		})
 	}
 
@@ -198,6 +219,14 @@ func (e *GeneralOrderExecutor) SetLogger(logger log.FieldLogger) {
 func (e *GeneralOrderExecutor) SubmitOrders(
 	ctx context.Context, submitOrders ...types.SubmitOrder,
 ) (types.OrderSlice, error) {
+	// Tag each submit order with strategyInstanceID so it propagates to created orders
+	// and gets registered in the session's strategy index for REST API lookups.
+	for i := range submitOrders {
+		if submitOrders[i].Tag == "" {
+			submitOrders[i].Tag = e.strategyInstanceID
+		}
+	}
+
 	formattedOrders, err := e.session.FormatOrders(submitOrders)
 	if err != nil {
 		return nil, err
@@ -206,6 +235,9 @@ func (e *GeneralOrderExecutor) SubmitOrders(
 	orderCreateCallback := func(createdOrder types.Order) {
 		e.orderStore.Add(createdOrder)
 		e.activeMakerOrders.Add(createdOrder)
+		if createdOrder.Tag != "" {
+			e.session.RegisterOrderStrategy(createdOrder.OrderID, createdOrder.Tag)
+		}
 	}
 
 	defer e.tradeCollector.Process()

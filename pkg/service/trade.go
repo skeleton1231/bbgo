@@ -41,6 +41,9 @@ type QueryTradesOptions struct {
 	// ASC or DESC
 	Ordering string
 
+	// Strategy filters by the strategy instance ID stored on trades
+	Strategy string
+
 	// OrderByColumn is the column name to order by
 	// Currently we only support traded_at and gid column.
 	OrderByColumn string
@@ -331,6 +334,10 @@ func (s *TradeService) Query(options QueryTradesOptions) ([]types.Trade, error) 
 		sel = sel.Where(sq.Eq{"symbol": options.Symbol})
 	}
 
+	if options.Strategy != "" {
+		sel = sel.Where(sq.Eq{"strategy": options.Strategy})
+	}
+
 	if options.Exchange != "" {
 		sel = sel.Where(sq.Eq{"exchange": options.Exchange})
 	}
@@ -423,6 +430,9 @@ func (s *TradeService) NetPosition(opts QueryTradesOptions) (float64, error) {
 	}
 	if opts.Symbol != "" {
 		sel = sel.Where(sq.Eq{"symbol": opts.Symbol})
+	}
+	if opts.Strategy != "" {
+		sel = sel.Where(sq.Eq{"strategy": opts.Strategy})
 	}
 	if opts.Until != nil {
 		sel = sel.Where(sq.Lt{"traded_at": opts.Until})
@@ -557,6 +567,19 @@ func (s *TradeService) Insert(trade types.Trade) error {
 	}
 	sql := dbCache.InsertSqlOf(trade)
 	_, err := s.DB.NamedExec(sql, trade)
+	return err
+}
+
+// UpdateStrategy writes a trade's strategy field. For Supabase it uses upsert;
+// for SQLite/MySQL it does a targeted UPDATE to avoid duplicate-key errors.
+func (s *TradeService) UpdateStrategy(trade types.Trade) error {
+	if s.Supabase != nil {
+		return s.Supabase.InsertTrade(trade)
+	}
+	if s.DB == nil {
+		return nil
+	}
+	_, err := s.DB.Exec("UPDATE trades SET strategy = ? WHERE id = ?", trade.StrategyID.String, trade.ID)
 	return err
 }
 

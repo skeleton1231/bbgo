@@ -267,6 +267,7 @@ func parseTradeQueryOptions(c *gin.Context) (service.QueryTradesOptions, bool) {
 	opts := service.QueryTradesOptions{
 		Exchange: types.ExchangeName(exchange),
 		Symbol:   symbol,
+		Strategy: c.Query("strategy"),
 		LastGID:  lastGID,
 		Ordering: "DESC",
 		Limit:    500,
@@ -334,6 +335,7 @@ func (s *Server) tradePositionSummary(c *gin.Context) {
 	opts := service.QueryTradesOptions{
 		Exchange: types.ExchangeName(exchange),
 		Symbol:   symbol,
+		Strategy: c.Query("strategy"),
 	}
 
 	if before := c.Query("before"); before != "" {
@@ -495,6 +497,17 @@ func (s *Server) getSessionAccountBalance(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"balances": session.GetAccount().Balances()})
 }
 
+func enrichOrdersWithStrategy(session *bbgo.ExchangeSession, orders []types.Order) {
+	for i := range orders {
+		if orders[i].Tag != "" {
+			continue
+		}
+		if strategyID, ok := session.LookupOrderStrategy(orders[i].OrderID); ok {
+			orders[i].Tag = strategyID
+		}
+	}
+}
+
 func (s *Server) listSessionOpenOrders(c *gin.Context) {
 	sessionName := c.Param("session")
 	session, ok := s.Environ.Session(sessionName)
@@ -510,6 +523,7 @@ func (s *Server) listSessionOpenOrders(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		enrichOrdersWithStrategy(session, orders)
 		c.JSON(http.StatusOK, gin.H{"orders": orders})
 		return
 	}
@@ -525,6 +539,7 @@ func (s *Server) listSessionOpenOrders(c *gin.Context) {
 	if allOrders == nil {
 		allOrders = []types.Order{}
 	}
+	enrichOrdersWithStrategy(session, allOrders)
 	c.JSON(http.StatusOK, gin.H{"orders": allOrders})
 }
 
