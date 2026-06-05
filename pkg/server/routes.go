@@ -499,9 +499,6 @@ func (s *Server) getSessionAccountBalance(c *gin.Context) {
 
 func enrichOrdersWithStrategy(session *bbgo.ExchangeSession, orders []types.Order) {
 	for i := range orders {
-		if orders[i].Tag != "" {
-			continue
-		}
 		if strategyID, ok := session.LookupOrderStrategy(orders[i].OrderID); ok {
 			orders[i].Tag = strategyID
 		}

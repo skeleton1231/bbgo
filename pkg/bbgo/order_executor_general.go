@@ -235,9 +235,7 @@ func (e *GeneralOrderExecutor) SubmitOrders(
 	orderCreateCallback := func(createdOrder types.Order) {
 		e.orderStore.Add(createdOrder)
 		e.activeMakerOrders.Add(createdOrder)
-		if createdOrder.Tag != "" {
-			e.session.RegisterOrderStrategy(createdOrder.OrderID, createdOrder.Tag)
-		}
+			e.session.RegisterOrderStrategy(createdOrder.OrderID, e.strategyInstanceID)
 	}
 
 	defer e.tradeCollector.Process()
