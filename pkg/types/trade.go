@@ -99,8 +99,11 @@ type Trade struct {
 
 	// The following fields are null-able fields
 
-	// StrategyID is the strategy that execute this trade
+	// StrategyID is the strategy type name that execute this trade (e.g., "grid2")
 	StrategyID sql.NullString `json:"strategyID" db:"strategy"`
+
+	// StrategyInstanceID is the unique strategy instance identifier (e.g., "grid2-BTCUSDT-size-10-70000-50000")
+	StrategyInstanceID string `json:"strategyInstanceID,omitempty" db:"strategy_instance_id"`
 
 	// PnL is the profit and loss value of the executed trade
 	PnL sql.NullFloat64 `json:"pnl" db:"pnl"`
@@ -120,14 +123,20 @@ func (trade Trade) MarshalJSON() ([]byte, error) {
 	if trade.PnL.Valid {
 		pnl = &trade.PnL.Float64
 	}
+	var strategyInstanceID *string
+	if trade.StrategyInstanceID != "" {
+		strategyInstanceID = &trade.StrategyInstanceID
+	}
 	return json.Marshal(&struct {
 		*Alias
-		StrategyID *string  `json:"strategyID"`
-		PnL        *float64 `json:"pnl"`
+		StrategyID         *string  `json:"strategyID"`
+		StrategyInstanceID *string  `json:"strategyInstanceID"`
+		PnL                *float64 `json:"pnl"`
 	}{
-		Alias:      (*Alias)(&trade),
-		StrategyID: strategyID,
-		PnL:        pnl,
+		Alias:              (*Alias)(&trade),
+		StrategyID:         strategyID,
+		StrategyInstanceID: strategyInstanceID,
+		PnL:                pnl,
 	})
 }
 

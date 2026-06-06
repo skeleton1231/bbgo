@@ -56,7 +56,7 @@ func (s *PositionService) Insert(
 	}
 
 	_, err := s.DB.NamedExec(`
-		INSERT INTO positions (
+		INSERT OR IGNORE INTO positions (
 			strategy,
 			strategy_instance_id,
 			symbol,

@@ -299,8 +299,9 @@ func (c *TradeCollector) Process() bool {
 }
 
 func (c *TradeCollector) applyTrade(trade types.Trade) (*types.Profit, bool) {
-	if c.position != nil && c.position.StrategyInstanceID != "" {
-		trade.StrategyID = sql.NullString{String: c.position.StrategyInstanceID, Valid: true}
+	if c.position != nil && c.position.Strategy != "" {
+		trade.StrategyID = sql.NullString{String: c.position.Strategy, Valid: true}
+		trade.StrategyInstanceID = c.position.StrategyInstanceID
 	}
 
 	if c.position != nil {

@@ -354,6 +354,8 @@ type Order struct {
 	IsFutures  bool `json:"isFutures,omitempty" db:"is_futures"`
 	IsMargin   bool `json:"isMargin,omitempty" db:"is_margin"`
 	IsIsolated bool `json:"isIsolated,omitempty" db:"is_isolated"`
+	// StrategyInstanceID is the unique strategy instance identifier, copied from SubmitOrder.Tag
+	StrategyInstanceID string `json:"strategyInstanceID,omitempty" db:"strategy_instance_id"`
 }
 
 func (o *Order) LogFields() logrus.Fields {

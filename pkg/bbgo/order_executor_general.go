@@ -236,6 +236,7 @@ func (e *GeneralOrderExecutor) SubmitOrders(
 		e.orderStore.Add(createdOrder)
 		e.activeMakerOrders.Add(createdOrder)
 			e.session.RegisterOrderStrategy(createdOrder.OrderID, e.strategyInstanceID)
+			createdOrder.StrategyInstanceID = e.strategyInstanceID
 	}
 
 	defer e.tradeCollector.Process()

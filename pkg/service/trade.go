@@ -44,6 +44,9 @@ type QueryTradesOptions struct {
 	// Strategy filters by the strategy instance ID stored on trades
 	Strategy string
 
+	// StrategyInstanceID filters by the unique strategy instance identifier
+	StrategyInstanceID string
+
 	// OrderByColumn is the column name to order by
 	// Currently we only support traded_at and gid column.
 	OrderByColumn string
@@ -335,7 +338,15 @@ func (s *TradeService) Query(options QueryTradesOptions) ([]types.Trade, error) 
 	}
 
 	if options.Strategy != "" {
-		sel = sel.Where(sq.Eq{"strategy": options.Strategy})
+		sel = sel.Where(sq.Or{
+			sq.Eq{"strategy": options.Strategy},
+			sq.Like{"strategy": options.Strategy + "-%"},
+			sq.Like{"strategy": options.Strategy + ":%"},
+		})
+	}
+
+	if options.StrategyInstanceID != "" {
+		sel = sel.Where(sq.Eq{"strategy_instance_id": options.StrategyInstanceID})
 	}
 
 	if options.Exchange != "" {
@@ -432,7 +443,11 @@ func (s *TradeService) NetPosition(opts QueryTradesOptions) (float64, error) {
 		sel = sel.Where(sq.Eq{"symbol": opts.Symbol})
 	}
 	if opts.Strategy != "" {
-		sel = sel.Where(sq.Eq{"strategy": opts.Strategy})
+		sel = sel.Where(sq.Or{
+			sq.Eq{"strategy": opts.Strategy},
+			sq.Like{"strategy": opts.Strategy + "-%"},
+			sq.Like{"strategy": opts.Strategy + ":%"},
+		})
 	}
 	if opts.Until != nil {
 		sel = sel.Where(sq.Lt{"traded_at": opts.Until})
@@ -559,8 +574,8 @@ func (s *TradeService) Insert(trade types.Trade) error {
 
 	if s.DB.DriverName() == "mysql" {
 		_, err := s.DB.NamedExec(`
-			INSERT INTO trades (id, order_id, order_uuid, exchange, price, quantity, quote_quantity, symbol, side, is_buyer, is_maker, traded_at, fee, fee_currency, is_margin, is_futures, is_isolated, strategy, pnl)
-			VALUES (:id, :order_id, IF(:order_uuid != '', UUID_TO_BIN(:order_uuid, true), ''), :exchange, :price, :quantity, :quote_quantity, :symbol, :side, :is_buyer, :is_maker, :traded_at, :fee, :fee_currency, :is_margin, :is_futures, :is_isolated, :strategy, :pnl)
+			INSERT INTO trades (id, order_id, order_uuid, exchange, price, quantity, quote_quantity, symbol, side, is_buyer, is_maker, traded_at, fee, fee_currency, is_margin, is_futures, is_isolated, strategy, strategy_instance_id, pnl)
+			VALUES (:id, :order_id, IF(:order_uuid != '', UUID_TO_BIN(:order_uuid, true), ''), :exchange, :price, :quantity, :quote_quantity, :symbol, :side, :is_buyer, :is_maker, :traded_at, :fee, :fee_currency, :is_margin, :is_futures, :is_isolated, :strategy, :strategy_instance_id, :pnl)
 			ON DUPLICATE KEY UPDATE id=:id, order_id=:order_id, order_uuid=:order_uuid, exchange=:exchange, price=:price, quantity=:quantity, quote_quantity=:quote_quantity, symbol=:symbol, side=:side, is_buyer=:is_buyer, is_maker=:is_maker, traded_at=:traded_at, fee=:fee, fee_currency=:fee_currency, is_margin=:is_margin, is_futures=:is_futures, is_isolated=:is_isolated, strategy=:strategy, pnl=:pnl;`,
 			trade)
 		return err
@@ -579,7 +594,7 @@ func (s *TradeService) UpdateStrategy(trade types.Trade) error {
 	if s.DB == nil {
 		return nil
 	}
-	_, err := s.DB.Exec("UPDATE trades SET strategy = ? WHERE id = ?", trade.StrategyID.String, trade.ID)
+	_, err := s.DB.Exec("UPDATE trades SET strategy = ?, strategy_instance_id = ? WHERE id = ?", trade.StrategyID.String, trade.StrategyInstanceID, trade.ID)
 	return err
 }
 

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -78,8 +79,9 @@ func (s *SupabaseService) InsertTrade(trade types.Trade) error {
 		IsMargin:      &trade.IsMargin,
 		IsIsolated:    &trade.IsIsolated,
 		IsFutures:     &trade.IsFutures,
-		Strategy:      ptrStr(trade.StrategyID.String),
-		OrderUuid:     ptrStr(trade.OrderUUID),
+		Strategy:           ptrStr(trade.StrategyID.String),
+		StrategyInstanceId: ptrStr(trade.StrategyInstanceID),
+		OrderUuid:          ptrStr(trade.OrderUUID),
 		Pnl:           &pnlStr,
 	}
 	_, _, err := s.client.From("trades").Upsert(row, "user_id,trade_id", "", "").Execute()
@@ -492,6 +494,8 @@ func supabaseTradeToTrade(row supabasetypes.PublicTradesSelect) (types.Trade, er
 		IsMargin:      row.IsMargin,
 		IsFutures:     row.IsFutures,
 		IsIsolated:    row.IsIsolated,
+		StrategyID:         sql.NullString{String: row.Strategy, Valid: row.Strategy != ""},
+		StrategyInstanceID: row.StrategyInstanceId,
 	}, nil
 }
 
