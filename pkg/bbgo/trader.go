@@ -189,6 +189,14 @@ func (trader *Trader) injectFieldsAndSubscribe(ctx context.Context) error {
 	// load and run Session strategies
 	for sessionName, strategies := range trader.exchangeStrategies {
 		var session = trader.environment.sessions[sessionName]
+
+		// Phase 1: inject common services and subscribe all strategies first,
+		// so that initSymbol sees ALL kline subscriptions (e.g. 1h from pivotshort)
+		// not just the first strategy's (e.g. 1m from grid2).
+		var strategySymbols []struct {
+			strategy types.StrategyID
+			symbol   string
+		}
 		for _, strategy := range strategies {
 			rs := reflect.ValueOf(strategy)
 
@@ -211,35 +219,42 @@ func (trader *Trader) injectFieldsAndSubscribe(ctx context.Context) error {
 
 			if symbol, ok := dynamic.LookupSymbolField(rs); ok && symbol != "" {
 				log.Infof("found symbol %s based strategy from %s", symbol, rs.Type())
+				strategySymbols = append(strategySymbols, struct {
+					strategy types.StrategyID
+					symbol   string
+				}{strategy: strategy, symbol: symbol})
+			}
+		}
 
-				if err := session.initSymbol(ctx, trader.environment, symbol); err != nil {
-					return errors.Wrapf(err, "failed to inject object into %T when initSymbol", strategy)
-				}
+		// Phase 2: init symbols after all strategies have subscribed,
+		// so kline preloading covers every requested interval.
+		for _, ss := range strategySymbols {
+			if err := session.initSymbol(ctx, trader.environment, ss.symbol); err != nil {
+				return errors.Wrapf(err, "failed to inject object into %T when initSymbol", ss.strategy)
+			}
+		}
 
-				market, ok := session.Market(symbol)
-				if !ok {
-					return fmt.Errorf("market of symbol %s not found", symbol)
-				}
+		// Phase 3: inject market/indicatorSet/store into each strategy.
+		for _, ss := range strategySymbols {
+			market, ok := session.Market(ss.symbol)
+			if !ok {
+				return fmt.Errorf("market of symbol %s not found", ss.symbol)
+			}
 
-				indicatorSet := session.StandardIndicatorSet(symbol)
-				if !ok {
-					return fmt.Errorf("standardIndicatorSet of symbol %s not found", symbol)
-				}
+			indicatorSet := session.StandardIndicatorSet(ss.symbol)
+			store, ok := session.MarketDataStore(ss.symbol)
+			if !ok {
+				return fmt.Errorf("marketDataStore of symbol %s not found", ss.symbol)
+			}
 
-				store, ok := session.MarketDataStore(symbol)
-				if !ok {
-					return fmt.Errorf("marketDataStore of symbol %s not found", symbol)
-				}
-
-				if err := dynamic.ParseStructAndInject(strategy,
-					market,
-					session,
-					session.OrderExecutor,
-					indicatorSet,
-					store,
-				); err != nil {
-					return errors.Wrapf(err, "failed to inject object into %T", strategy)
-				}
+			if err := dynamic.ParseStructAndInject(ss.strategy,
+				market,
+				session,
+				session.OrderExecutor,
+				indicatorSet,
+				store,
+			); err != nil {
+				return errors.Wrapf(err, "failed to inject object into %T", ss.strategy)
 			}
 		}
 	}

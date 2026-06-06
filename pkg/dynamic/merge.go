@@ -4,37 +4,47 @@ import "reflect"
 
 // InheritStructValues merges the field value from the source struct to the dest struct.
 // Only fields with the same type and the same name will be updated.
+// Anonymous embedded struct fields are recursed into so that sub-fields
+// (e.g. Quantity inside an embedded OpenPositionOptions) can be inherited
+// from matching fields on the source.
 func InheritStructValues(dst, src interface{}) {
 	if dst == nil {
 		return
 	}
 
-	rtA := reflect.TypeOf(dst)
-	srcStructType := reflect.TypeOf(src)
+	dstVal := reflect.ValueOf(dst).Elem()
+	srcVal := reflect.ValueOf(src).Elem()
+	inheritFields(dstVal, srcVal)
+}
 
-	rtA = rtA.Elem()
-	srcStructType = srcStructType.Elem()
+func inheritFields(dstVal, srcVal reflect.Value) {
+	dstType := dstVal.Type()
+	srcType := srcVal.Type()
 
-	for i := 0; i < rtA.NumField(); i++ {
-		fieldType := rtA.Field(i)
-		fieldName := fieldType.Name
+	for i := 0; i < dstType.NumField(); i++ {
+		fieldType := dstType.Field(i)
 
 		if !fieldType.IsExported() {
 			continue
 		}
 
-		// if there is a field with the same name
-		fieldSrcType, found := srcStructType.FieldByName(fieldName)
+		if fieldType.Anonymous && fieldType.Type.Kind() == reflect.Struct {
+			inheritFields(dstVal.Field(i), srcVal)
+			continue
+		}
+
+		fieldName := fieldType.Name
+
+		fieldSrcType, found := srcType.FieldByName(fieldName)
 		if !found {
 			continue
 		}
 
-		// ensure that the type is the same
 		if fieldSrcType.Type == fieldType.Type {
-			srcValue := reflect.ValueOf(src).Elem().FieldByName(fieldName)
-			dstValue := reflect.ValueOf(dst).Elem().FieldByName(fieldName)
-			if (fieldType.Type.Kind() == reflect.Ptr && dstValue.IsNil()) || dstValue.IsZero() {
-				dstValue.Set(srcValue)
+			srcFieldValue := srcVal.FieldByName(fieldName)
+			dstFieldValue := dstVal.FieldByName(fieldName)
+			if (fieldType.Type.Kind() == reflect.Ptr && dstFieldValue.IsNil()) || dstFieldValue.IsZero() {
+				dstFieldValue.Set(srcFieldValue)
 			}
 		}
 	}
