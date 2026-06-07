@@ -15,6 +15,7 @@ import (
 	"go.uber.org/multierr"
 
 	"github.com/c9s/bbgo/pkg/bbgo"
+	"github.com/c9s/bbgo/pkg/instanceid"
 	"github.com/c9s/bbgo/pkg/core"
 	"github.com/c9s/bbgo/pkg/exchange/retry"
 	"github.com/c9s/bbgo/pkg/fixedpoint"
@@ -139,7 +140,7 @@ func (s *Strategy) ID() string {
 }
 
 func (s *Strategy) InstanceID() string {
-	return ID + strings.Join(s.Symbols, "-")
+	return instanceid.Tri(s.Symbols)
 }
 
 func (s *Strategy) Subscribe(session *bbgo.ExchangeSession) {

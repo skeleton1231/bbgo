@@ -2,7 +2,6 @@ package convert
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 	"sync"
 	"time"
@@ -10,6 +9,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/c9s/bbgo/pkg/bbgo"
+	"github.com/c9s/bbgo/pkg/instanceid"
 	"github.com/c9s/bbgo/pkg/fixedpoint"
 	"github.com/c9s/bbgo/pkg/types"
 	"github.com/c9s/bbgo/pkg/util/tradingutil"
@@ -60,7 +60,7 @@ func (s *Strategy) ID() string {
 }
 
 func (s *Strategy) InstanceID() string {
-	return fmt.Sprintf("%s:%s-%s", ID, s.From, s.To)
+	return instanceid.Convert(s.From, s.To)
 }
 
 func (s *Strategy) Subscribe(session *bbgo.ExchangeSession) {

@@ -4,12 +4,12 @@ package flashcrash
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
 	log "github.com/sirupsen/logrus"
 
 	"github.com/c9s/bbgo/pkg/bbgo"
+	"github.com/c9s/bbgo/pkg/instanceid"
 	"github.com/c9s/bbgo/pkg/fixedpoint"
 	"github.com/c9s/bbgo/pkg/indicator"
 	"github.com/c9s/bbgo/pkg/types"
@@ -59,7 +59,7 @@ func (s *Strategy) ID() string {
 }
 
 func (s *Strategy) InstanceID() string {
-	return fmt.Sprintf("%s:%s:%s", ID, s.Symbol, s.Interval)
+	return instanceid.WithInterval(ID, s.Symbol, string(s.Interval))
 }
 
 func (s *Strategy) Validate() error {

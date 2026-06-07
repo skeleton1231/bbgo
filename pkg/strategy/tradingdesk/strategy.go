@@ -10,6 +10,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/c9s/bbgo/pkg/bbgo"
+	"github.com/c9s/bbgo/pkg/instanceid"
 	"github.com/c9s/bbgo/pkg/fixedpoint"
 	"github.com/c9s/bbgo/pkg/service"
 	"github.com/c9s/bbgo/pkg/types"
@@ -52,7 +53,7 @@ func (s *Strategy) ID() string {
 }
 
 func (s *Strategy) InstanceID() string {
-	return ID
+	return instanceid.IDOnly(ID)
 }
 
 func (s *Strategy) Load(ctx context.Context, store service.Store) error {

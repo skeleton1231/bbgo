@@ -1,6 +1,7 @@
 package dynamic
 
 import (
+	"os"
 	"reflect"
 )
 
@@ -9,6 +10,10 @@ type InstanceIDProvider interface {
 }
 
 func CallID(obj interface{}) string {
+	if id := os.Getenv("BBGO_STRATEGY_INSTANCE_ID"); id != "" {
+		return id
+	}
+
 	sv := reflect.ValueOf(obj)
 	st := reflect.TypeOf(obj)
 	if st.Implements(reflect.TypeOf((*InstanceIDProvider)(nil)).Elem()) {

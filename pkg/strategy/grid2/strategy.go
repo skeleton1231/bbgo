@@ -15,6 +15,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/c9s/bbgo/pkg/bbgo"
+	"github.com/c9s/bbgo/pkg/instanceid"
 	"github.com/c9s/bbgo/pkg/core"
 	"github.com/c9s/bbgo/pkg/exchange/retry"
 	"github.com/c9s/bbgo/pkg/fixedpoint"
@@ -277,15 +278,10 @@ func (s *Strategy) Subscribe(session *bbgo.ExchangeSession) {
 
 // InstanceID returns the instance identifier from the current grid configuration parameters
 func (s *Strategy) InstanceID() string {
-	id := fmt.Sprintf("%s-%s-size-%d", ID, s.Symbol, s.GridNum)
-
 	if s.AutoRange != nil {
-		id += "-autoRange-" + s.AutoRange.String()
-	} else {
-		id += "-" + s.UpperPrice.String() + "-" + s.LowerPrice.String()
+		return instanceid.GridLikeAutoRange(ID, s.Symbol, int(s.GridNum), s.AutoRange.String())
 	}
-
-	return id
+	return instanceid.GridLike(ID, s.Symbol, int(s.GridNum), s.UpperPrice.String(), s.LowerPrice.String())
 }
 
 func (s *Strategy) checkSpread() error {

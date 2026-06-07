@@ -2,7 +2,6 @@ package liquiditymaker
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -10,6 +9,7 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/c9s/bbgo/pkg/bbgo"
+	"github.com/c9s/bbgo/pkg/instanceid"
 	"github.com/c9s/bbgo/pkg/dbg"
 	"github.com/c9s/bbgo/pkg/dynamic"
 	"github.com/c9s/bbgo/pkg/fixedpoint"
@@ -104,7 +104,7 @@ func (s *Strategy) ID() string {
 }
 
 func (s *Strategy) InstanceID() string {
-	return fmt.Sprintf("%s:%s", ID, s.Symbol)
+	return instanceid.Simple(ID, s.Symbol)
 }
 
 func (s *Strategy) Subscribe(session *bbgo.ExchangeSession) {

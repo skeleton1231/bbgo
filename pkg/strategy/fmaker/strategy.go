@@ -10,6 +10,7 @@ import (
 	"gonum.org/v1/gonum/floats"
 
 	"github.com/c9s/bbgo/pkg/bbgo"
+	"github.com/c9s/bbgo/pkg/instanceid"
 	"github.com/c9s/bbgo/pkg/core"
 	floats2 "github.com/c9s/bbgo/pkg/datatype/floats"
 	"github.com/c9s/bbgo/pkg/fixedpoint"
@@ -145,7 +146,7 @@ func (s *Strategy) ClosePosition(ctx context.Context, percentage fixedpoint.Valu
 	return err
 }
 func (s *Strategy) InstanceID() string {
-	return fmt.Sprintf("%s:%s", ID, s.Symbol)
+	return instanceid.Simple(ID, s.Symbol)
 }
 
 func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, session *bbgo.ExchangeSession) error {

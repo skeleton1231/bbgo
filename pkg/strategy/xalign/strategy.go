@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -14,6 +13,8 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/c9s/bbgo/pkg/bbgo"
+	"github.com/c9s/bbgo/pkg/instanceid"
+	"sort"
 	"github.com/c9s/bbgo/pkg/core"
 	"github.com/c9s/bbgo/pkg/dynamic"
 	"github.com/c9s/bbgo/pkg/fixedpoint"
@@ -112,14 +113,11 @@ func (s *Strategy) ID() string {
 
 func (s *Strategy) InstanceID() string {
 	var cs []string
-
-	if s.ExpectedBalances != nil {
-		for cur := range s.ExpectedBalances {
-			cs = append(cs, cur)
-		}
+	for cur := range s.ExpectedBalances {
+		cs = append(cs, cur)
 	}
-
-	return ID + strings.Join(s.PreferredSessions, "-") + strings.Join(cs, "-")
+	sort.Strings(cs)
+	return instanceid.XAlign(s.PreferredSessions, cs)
 }
 
 func (s *Strategy) Subscribe(session *bbgo.ExchangeSession) {

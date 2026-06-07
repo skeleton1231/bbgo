@@ -8,6 +8,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/c9s/bbgo/pkg/bbgo"
+	"github.com/c9s/bbgo/pkg/instanceid"
 	"github.com/c9s/bbgo/pkg/fixedpoint"
 	indicatorv2 "github.com/c9s/bbgo/pkg/indicator/v2"
 	"github.com/c9s/bbgo/pkg/strategy/common"
@@ -75,7 +76,7 @@ func (s *Strategy) ID() string {
 }
 
 func (s *Strategy) InstanceID() string {
-	return fmt.Sprintf("%s:%s", ID, s.Symbol)
+	return instanceid.Simple(ID, s.Symbol)
 }
 
 // Validate validates the validity of strategy parameters

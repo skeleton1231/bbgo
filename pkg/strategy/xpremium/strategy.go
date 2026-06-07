@@ -17,6 +17,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/c9s/bbgo/pkg/bbgo"
+	"github.com/c9s/bbgo/pkg/instanceid"
 	"github.com/c9s/bbgo/pkg/exchange/retry"
 	"github.com/c9s/bbgo/pkg/fixedpoint"
 	indicatorv2 "github.com/c9s/bbgo/pkg/indicator/v2"
@@ -228,7 +229,7 @@ func (s *Signal) SlackAttachment() slack.Attachment {
 func (s *Strategy) ID() string { return ID }
 
 func (s *Strategy) InstanceID() string {
-	return strings.Join([]string{ID, s.BaseSession, s.PremiumSession, s.Symbol}, ":")
+	return instanceid.XPremium(s.BaseSession, s.PremiumSession, s.Symbol)
 }
 
 func (s *Strategy) Initialize() error {

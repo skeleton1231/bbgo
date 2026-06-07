@@ -9,6 +9,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/c9s/bbgo/pkg/bbgo"
+	"github.com/c9s/bbgo/pkg/instanceid"
 	"github.com/c9s/bbgo/pkg/core"
 	"github.com/c9s/bbgo/pkg/fixedpoint"
 	"github.com/c9s/bbgo/pkg/service"
@@ -536,7 +537,7 @@ func (s *Strategy) LoadState() error {
 
 // InstanceID returns the instance identifier from the current grid configuration parameters
 func (s *Strategy) InstanceID() string {
-	return fmt.Sprintf("%s-%s-%d-%d-%d", ID, s.Symbol, s.GridNum, s.UpperPrice.Int(), s.LowerPrice.Int())
+	return instanceid.Grid(s.Symbol, int(s.GridNum), s.UpperPrice.String(), s.LowerPrice.String())
 }
 
 func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, session *bbgo.ExchangeSession) error {

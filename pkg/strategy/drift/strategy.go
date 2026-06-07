@@ -15,6 +15,7 @@ import (
 	"go.uber.org/multierr"
 
 	"github.com/c9s/bbgo/pkg/bbgo"
+	"github.com/c9s/bbgo/pkg/instanceid"
 	"github.com/c9s/bbgo/pkg/datatype/floats"
 	"github.com/c9s/bbgo/pkg/dynamic"
 	"github.com/c9s/bbgo/pkg/fixedpoint"
@@ -165,7 +166,7 @@ func (s *Strategy) Validate() error {
 }
 
 func (s *Strategy) InstanceID() string {
-	return fmt.Sprintf("%s:%s:%v", ID, s.Symbol, bbgo.IsBackTesting)
+	return instanceid.WithBacktest(ID, s.Symbol, bbgo.IsBackTesting)
 }
 
 func (s *Strategy) Subscribe(session *bbgo.ExchangeSession) {

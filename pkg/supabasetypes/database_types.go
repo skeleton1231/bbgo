@@ -491,3 +491,48 @@ type PublicStrategyRegistryUpdate struct {
   SortOrder       *int32      `json:"sort_order"`
   UpdatedAt       *string     `json:"updated_at"`
 }
+
+type PublicStrategyInstancesSelect struct {
+  Config        interface{} `json:"config"`
+  CreatedAt     string      `json:"created_at"`
+  CrossExchange bool        `json:"cross_exchange"`
+  Exchange      string      `json:"exchange"`
+  InstanceId    string      `json:"instance_id"`
+  Mode          string      `json:"mode"`
+  Name          string      `json:"name"`
+  Sessions      interface{} `json:"sessions"`
+  Strategy      string      `json:"strategy"`
+  Symbol        string      `json:"symbol"`
+  UpdatedAt     string      `json:"updated_at"`
+  UserId        string      `json:"user_id"`
+}
+
+type PublicStrategyInstancesInsert struct {
+  Config        interface{} `json:"config"`
+  CreatedAt     *string     `json:"created_at"`
+  CrossExchange *bool       `json:"cross_exchange"`
+  Exchange      *string     `json:"exchange"`
+  InstanceId    string      `json:"instance_id"`
+  Mode          string      `json:"mode"`
+  Name          *string     `json:"name"`
+  Sessions      interface{} `json:"sessions"`
+  Strategy      string      `json:"strategy"`
+  Symbol        *string     `json:"symbol"`
+  UpdatedAt     *string     `json:"updated_at"`
+  UserId        string      `json:"user_id"`
+}
+
+type PublicStrategyInstancesUpdate struct {
+  Config        interface{} `json:"config"`
+  CreatedAt     *string     `json:"created_at"`
+  CrossExchange *bool       `json:"cross_exchange"`
+  Exchange      *string     `json:"exchange"`
+  InstanceId    *string     `json:"instance_id"`
+  Mode          *string     `json:"mode"`
+  Name          *string     `json:"name"`
+  Sessions      interface{} `json:"sessions"`
+  Strategy      *string     `json:"strategy"`
+  Symbol        *string     `json:"symbol"`
+  UpdatedAt     *string     `json:"updated_at"`
+  UserId        *string     `json:"user_id"`
+}

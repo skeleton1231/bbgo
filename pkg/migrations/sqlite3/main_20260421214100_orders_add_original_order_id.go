@@ -7,10 +7,10 @@ import (
 )
 
 func init() {
-	AddMigration("main", up_main_ordersAddActualOrderId, down_main_ordersAddActualOrderId)
+	AddMigration("main", up_main_ordersAddOriginalOrderId, down_main_ordersAddOriginalOrderId)
 }
 
-func up_main_ordersAddActualOrderId(ctx context.Context, tx rockhopper.SQLExecutor) (err error) {
+func up_main_ordersAddOriginalOrderId(ctx context.Context, tx rockhopper.SQLExecutor) (err error) {
 	// This code is executed when the migration is applied.
 	_, err = tx.ExecContext(ctx, "ALTER TABLE orders ADD COLUMN actual_order_id INTEGER NOT NULL DEFAULT 0;")
 	if err != nil {
@@ -19,7 +19,7 @@ func up_main_ordersAddActualOrderId(ctx context.Context, tx rockhopper.SQLExecut
 	return err
 }
 
-func down_main_ordersAddActualOrderId(ctx context.Context, tx rockhopper.SQLExecutor) (err error) {
+func down_main_ordersAddOriginalOrderId(ctx context.Context, tx rockhopper.SQLExecutor) (err error) {
 	// This code is executed when the migration is rolled back.
 	_, err = tx.ExecContext(ctx, "ALTER TABLE orders DROP COLUMN actual_order_id;")
 	if err != nil {

@@ -2,7 +2,6 @@ package wall
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -12,6 +11,7 @@ import (
 	"github.com/c9s/bbgo/pkg/strategy/common"
 
 	"github.com/c9s/bbgo/pkg/bbgo"
+	"github.com/c9s/bbgo/pkg/instanceid"
 	"github.com/c9s/bbgo/pkg/fixedpoint"
 	"github.com/c9s/bbgo/pkg/types"
 )
@@ -76,7 +76,7 @@ func (s *Strategy) ID() string {
 }
 
 func (s *Strategy) InstanceID() string {
-	return fmt.Sprintf("%s:%s", ID, s.Symbol)
+	return instanceid.Simple(ID, s.Symbol)
 }
 
 func (s *Strategy) Subscribe(session *bbgo.ExchangeSession) {

@@ -4,7 +4,6 @@ import (
 	"context"
 	stderrors "errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/c9s/bbgo/pkg/bbgo"
+	"github.com/c9s/bbgo/pkg/instanceid"
 	"github.com/c9s/bbgo/pkg/core"
 	"github.com/c9s/bbgo/pkg/dbg"
 	"github.com/c9s/bbgo/pkg/exchange/retry"
@@ -310,14 +310,7 @@ func (s *Strategy) ID() string {
 }
 
 func (s *Strategy) InstanceID() string {
-	// this generates a unique instance ID for the strategy
-	return strings.Join([]string{
-		ID,
-		s.MakerExchange,
-		s.Symbol,
-		s.HedgeExchange,
-		s.HedgeSymbol,
-	}, "-")
+	return instanceid.XDepthMaker(s.MakerExchange, s.Symbol, s.HedgeExchange, s.HedgeSymbol)
 }
 
 func (s *Strategy) Initialize() error {

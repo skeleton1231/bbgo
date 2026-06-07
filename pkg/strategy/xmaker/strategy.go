@@ -18,6 +18,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/c9s/bbgo/pkg/bbgo"
+	"github.com/c9s/bbgo/pkg/instanceid"
 	"github.com/c9s/bbgo/pkg/bbgo/sessionworker"
 	"github.com/c9s/bbgo/pkg/core"
 	"github.com/c9s/bbgo/pkg/dynamic"
@@ -341,7 +342,7 @@ func (s *Strategy) ID() string {
 }
 
 func (s *Strategy) InstanceID() string {
-	return strings.Join([]string{ID, s.Symbol}, ":")
+	return instanceid.Simple(ID, s.Symbol)
 }
 
 func (s *Strategy) CrossSubscribe(sessions map[string]*bbgo.ExchangeSession) {

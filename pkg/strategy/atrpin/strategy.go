@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/c9s/bbgo/pkg/bbgo"
+	"github.com/c9s/bbgo/pkg/instanceid"
 	"github.com/c9s/bbgo/pkg/fixedpoint"
 	"github.com/c9s/bbgo/pkg/strategy/common"
 	"github.com/c9s/bbgo/pkg/types"
@@ -67,7 +68,7 @@ func (s *Strategy) ID() string {
 }
 
 func (s *Strategy) InstanceID() string {
-	return fmt.Sprintf("%s:%s:%s:%d", ID, s.Symbol, s.Interval, s.Window)
+	return instanceid.Atrpin(s.Symbol, string(s.Interval), s.Window)
 }
 
 func (s *Strategy) Subscribe(session *bbgo.ExchangeSession) {

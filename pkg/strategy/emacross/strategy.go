@@ -2,12 +2,12 @@ package emacross
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
 	log "github.com/sirupsen/logrus"
 
 	"github.com/c9s/bbgo/pkg/bbgo"
+	"github.com/c9s/bbgo/pkg/instanceid"
 	"github.com/c9s/bbgo/pkg/fixedpoint"
 	indicatorv2 "github.com/c9s/bbgo/pkg/indicator/v2"
 	"github.com/c9s/bbgo/pkg/strategy/common"
@@ -48,7 +48,7 @@ func (s *Strategy) Validate() error {
 }
 
 func (s *Strategy) InstanceID() string {
-	return fmt.Sprintf("%s:%s:%s:%d-%d", ID, s.Symbol, s.Interval, s.FastWindow, s.SlowWindow)
+	return instanceid.Emacross(s.Symbol, string(s.Interval), s.FastWindow, s.SlowWindow)
 }
 
 func (s *Strategy) Initialize() error {

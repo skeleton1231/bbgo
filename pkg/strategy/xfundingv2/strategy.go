@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/c9s/bbgo/pkg/bbgo"
+	"github.com/c9s/bbgo/pkg/instanceid"
 	"github.com/c9s/bbgo/pkg/datasource/coinmarketcap"
 	"github.com/c9s/bbgo/pkg/fixedpoint"
 	"github.com/c9s/bbgo/pkg/risk/circuitbreaker"
@@ -135,8 +135,7 @@ func (s *Strategy) ID() string {
 }
 
 func (s *Strategy) InstanceID() string {
-	symbols := strings.Join(s.CandidateSymbols, "_")
-	return fmt.Sprintf("%s-%s-%s-futures", ID, symbols, s.MarketSelectionConfig.FuturesDirection)
+	return instanceid.XFundingV2(s.CandidateSymbols, string(s.MarketSelectionConfig.FuturesDirection))
 }
 
 func (s *Strategy) Defaults() error {
