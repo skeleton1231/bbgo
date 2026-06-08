@@ -21,10 +21,14 @@ import (
 // TODO: add summary query for calculating the reward amounts
 // CREATE VIEW reward_summary_by_years AS SELECT YEAR(created_at) as year, reward_type, currency, SUM(quantity) FROM rewards WHERE reward_type != 'airdrop' GROUP BY YEAR(created_at), reward_type, currency ORDER BY year DESC;
 type RewardService struct {
-	DB *sqlx.DB
+	DB       *sqlx.DB
+	Supabase *SupabaseService
 }
 
 func (s *RewardService) Sync(ctx context.Context, exchange types.Exchange, startTime time.Time) error {
+	if s.DB == nil {
+		return nil
+	}
 	api, ok := exchange.(types.ExchangeRewardService)
 	if !ok {
 		return ErrExchangeRewardServiceNotImplemented
@@ -181,6 +185,9 @@ func (s *RewardService) scanRows(rows *sqlx.Rows) (rewards []types.Reward, err e
 }
 
 func (s *RewardService) Insert(reward types.Reward) error {
+	if s.Supabase != nil {
+		return s.Supabase.InsertReward(reward)
+	}
 	_, err := s.DB.NamedExec(`
 			INSERT INTO rewards (exchange, uuid, reward_type, currency, quantity, state, note, created_at)
 			VALUES (:exchange, :uuid, :reward_type, :currency, :quantity, :state, :note, :created_at)`,

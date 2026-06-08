@@ -292,6 +292,21 @@ func (environ *Environment) configureSupabase() error {
 	environ.TradeService = &service.TradeService{Supabase: supaSvc}
 	environ.ProfitService = &service.ProfitService{Supabase: supaSvc}
 	environ.PositionService = &service.PositionService{Supabase: supaSvc}
+	environ.AccountService = &service.AccountService{Supabase: supaSvc}
+	environ.RewardService = &service.RewardService{Supabase: supaSvc}
+	environ.WithdrawService = &service.WithdrawService{Supabase: supaSvc}
+	environ.DepositService = &service.DepositService{Supabase: supaSvc}
+	environ.MarginService = &service.MarginService{Supabase: supaSvc}
+
+	environ.SyncService = &service.SyncService{
+		TradeService:    environ.TradeService,
+		OrderService:    environ.OrderService,
+		RewardService:   environ.RewardService,
+		MarginService:   environ.MarginService,
+		WithdrawService: environ.WithdrawService,
+		DepositService:  environ.DepositService,
+		FuturesService:  &service.FuturesService{Supabase: supaSvc},
+	}
 
 	return nil
 }
@@ -459,6 +474,11 @@ func (environ *Environment) BindSync(config *SyncConfig) {
 				order.IsIsolated = session.IsolatedMargin
 			} else if session.Futures {
 				order.IsIsolated = session.IsolatedFutures
+			}
+			if order.StrategyInstanceID == "" {
+				if id, ok := session.LookupOrderStrategy(order.OrderID); ok {
+					order.StrategyInstanceID = id
+				}
 			}
 
 			switch order.Status {
@@ -706,7 +726,7 @@ func (environ *Environment) RecordAsset(t time.Time, session *ExchangeSession, a
 		return
 	}
 
-	if environ.DatabaseService == nil || environ.AccountService == nil {
+	if environ.AccountService == nil {
 		return
 	}
 
@@ -729,7 +749,7 @@ func (environ *Environment) RecordPosition(position *types.Position, trade types
 		return
 	}
 
-	if environ.DatabaseService == nil || environ.ProfitService == nil || environ.PositionService == nil {
+	if environ.ProfitService == nil || environ.PositionService == nil {
 		return
 	}
 

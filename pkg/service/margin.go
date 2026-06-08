@@ -13,10 +13,50 @@ import (
 )
 
 type MarginService struct {
-	DB *sqlx.DB
+	DB       *sqlx.DB
+	Supabase *SupabaseService
+}
+
+func (s *MarginService) InsertLoan(loan types.MarginLoan) error {
+	if s.Supabase != nil {
+		return s.Supabase.InsertMarginLoan(loan)
+	}
+	_, err := s.DB.NamedExec(`INSERT INTO margin_loans (exchange, transaction_id, asset, isolated_symbol, principle, time)
+		VALUES (:exchange, :transaction_id, :asset, :isolated_symbol, :principle, :time)`, loan)
+	return err
+}
+
+func (s *MarginService) InsertRepay(repay types.MarginRepay) error {
+	if s.Supabase != nil {
+		return s.Supabase.InsertMarginRepay(repay)
+	}
+	_, err := s.DB.NamedExec(`INSERT INTO margin_repays (exchange, transaction_id, asset, isolated_symbol, principle, time)
+		VALUES (:exchange, :transaction_id, :asset, :isolated_symbol, :principle, :time)`, repay)
+	return err
+}
+
+func (s *MarginService) InsertInterest(interest types.MarginInterest) error {
+	if s.Supabase != nil {
+		return s.Supabase.InsertMarginInterest(interest)
+	}
+	_, err := s.DB.NamedExec(`INSERT INTO margin_interests (exchange, asset, isolated_symbol, principle, interest, interest_rate, time)
+		VALUES (:exchange, :asset, :isolated_symbol, :principle, :interest, :interest_rate, :time)`, interest)
+	return err
+}
+
+func (s *MarginService) InsertLiquidation(liquidation types.MarginLiquidation) error {
+	if s.Supabase != nil {
+		return s.Supabase.InsertMarginLiquidation(liquidation)
+	}
+	_, err := s.DB.NamedExec(`INSERT INTO margin_liquidations (exchange, symbol, side, order_id, price, quantity, average_price, executed_quantity, time_in_force, is_isolated, time)
+		VALUES (:exchange, :symbol, :side, :order_id, :price, :quantity, :average_price, :executed_quantity, :time_in_force, :is_isolated, :time)`, liquidation)
+	return err
 }
 
 func (s *MarginService) Sync(ctx context.Context, ex types.Exchange, asset string, startTime time.Time) error {
+	if s.DB == nil {
+		return nil
+	}
 	api, ok := ex.(types.MarginHistoryService)
 	if !ok {
 		return nil

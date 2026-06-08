@@ -346,3 +346,15 @@ func TestNewSupabaseServiceValidation(t *testing.T) {
 	_, err = NewSupabaseService("https://example.supabase.co", "", "user")
 	assert.Error(t, err)
 }
+
+func TestTablePrefix(t *testing.T) {
+	svc := &SupabaseService{userID: "test", tablePrefix: ""}
+	assert.Equal(t, "orders", svc.table("orders"))
+	assert.Equal(t, "trades", svc.table("trades"))
+
+	paperSvc := &SupabaseService{userID: "test", tablePrefix: "paper_"}
+	assert.Equal(t, "paper_orders", paperSvc.table("orders"))
+	assert.Equal(t, "paper_trades", paperSvc.table("trades"))
+	assert.Equal(t, "paper_positions", paperSvc.table("positions"))
+	assert.Equal(t, "paper_profits", paperSvc.table("profits"))
+}

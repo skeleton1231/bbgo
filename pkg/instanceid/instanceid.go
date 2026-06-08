@@ -179,11 +179,19 @@ func paramString(m map[string]any, key string) string {
 	if !ok {
 		return ""
 	}
-	s, ok := v.(string)
-	if !ok {
+	switch s := v.(type) {
+	case string:
+		return s
+	case float64:
+		if s == float64(int(s)) {
+			return strconv.Itoa(int(s))
+		}
+		return strconv.FormatFloat(s, 'f', -1, 64)
+	case json.Number:
+		return s.String()
+	default:
 		return ""
 	}
-	return s
 }
 
 func paramInt(m map[string]any, key string) int {

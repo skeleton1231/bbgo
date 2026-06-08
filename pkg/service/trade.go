@@ -82,6 +82,9 @@ func (s *TradeService) Sync(
 	exchange types.Exchange, symbol string,
 	startTime, endTime time.Time,
 ) error {
+	if s.DB == nil {
+		return nil
+	}
 	isMargin, isFutures, isIsolated, isolatedSymbol := exchange2.GetSessionAttributes(exchange)
 	// override symbol if isolatedSymbol is not empty
 	if isIsolated && len(isolatedSymbol) > 0 {

@@ -14,6 +14,7 @@ import (
 
 type FuturesService struct {
 	DB                         *sqlx.DB
+	Supabase                   *SupabaseService
 	PositionRiskUpdateInterval time.Duration
 
 	positionRiskLastUpdateTime map[string]time.Time
@@ -77,6 +78,9 @@ func (s *FuturesService) Sync(
 ) error {
 	// TODO: sync the position history of the given time range
 	// we only sync the lastest position risk record for now.
+	if s.DB == nil {
+		return nil
+	}
 	// Binance does not provide the position risk history API for the time being.
 	risks, err := service.QueryPositionRisk(ctx, symbol)
 	if err != nil {
@@ -124,6 +128,9 @@ func (s *FuturesService) Query(options QueryFuturesPositionRiskOptions) ([]types
 }
 
 func (s *FuturesService) Insert(risk types.PositionRisk) (err error) {
+	if s.Supabase != nil {
+		return s.Supabase.InsertPositionRisk(risk)
+	}
 	sql := `
 	INSERT INTO futures_position_risks (
 		exchange, symbol, position_side, entry_price, leverage, liquidation_price,

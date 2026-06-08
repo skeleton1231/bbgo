@@ -341,8 +341,6 @@ func (c *TradeCollector) processTrade(trade types.Trade) bool {
 			logrus.Errorf("[tradecollector] process trade %+v has no OrderID", trade)
 		}
 		if !c.orderStore.Exists(trade.OrderID) {
-			// not done yet
-			// add this trade to the trade store for the later processing
 			c.tradeStore.Add(trade)
 			c.mu.Unlock()
 			return false

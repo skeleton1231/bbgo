@@ -13,11 +13,15 @@ import (
 )
 
 type WithdrawService struct {
-	DB *sqlx.DB
+	DB       *sqlx.DB
+	Supabase *SupabaseService
 }
 
 // Sync syncs the withdrawal records into db
 func (s *WithdrawService) Sync(ctx context.Context, ex types.Exchange, startTime time.Time) error {
+	if s.DB == nil {
+		return nil
+	}
 	isMargin, isFutures, isIsolated, _ := exchange.GetSessionAttributes(ex)
 	if isMargin || isFutures || isIsolated {
 		// only works in spot
@@ -124,6 +128,9 @@ func (s *WithdrawService) scanRows(rows *sqlx.Rows) (withdraws []types.Withdraw,
 }
 
 func (s *WithdrawService) Insert(withdrawal types.Withdraw) error {
+	if s.Supabase != nil {
+		return s.Supabase.InsertWithdraw(withdrawal)
+	}
 	sql := `INSERT INTO withdraws (exchange, asset, network, address, amount, txn_id, txn_fee, time)
 			VALUES (:exchange, :asset, :network, :address, :amount, :txn_id, :txn_fee, :time)`
 	_, err := s.DB.NamedExec(sql, withdrawal)

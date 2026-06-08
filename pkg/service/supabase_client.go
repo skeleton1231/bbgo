@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -12,13 +13,15 @@ import (
 	"github.com/c9s/bbgo/pkg/fixedpoint"
 	"github.com/c9s/bbgo/pkg/supabasetypes"
 	"github.com/c9s/bbgo/pkg/types"
+	"github.com/c9s/bbgo/pkg/types/asset"
 	postgrest "github.com/supabase-community/postgrest-go"
 	supabase "github.com/supabase-community/supabase-go"
 )
 
 type SupabaseService struct {
-	client *supabase.Client
-	userID string
+	client      *supabase.Client
+	userID      string
+	tablePrefix string
 }
 
 func NewSupabaseService(url, key, userID string) (*SupabaseService, error) {
@@ -26,7 +29,12 @@ func NewSupabaseService(url, key, userID string) (*SupabaseService, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create supabase client: %w", err)
 	}
-	return &SupabaseService{client: client, userID: userID}, nil
+	prefix := os.Getenv("SUPABASE_TABLE_PREFIX")
+	return &SupabaseService{client: client, userID: userID, tablePrefix: prefix}, nil
+}
+
+func (s *SupabaseService) table(name string) string {
+	return s.tablePrefix + name
 }
 
 func (s *SupabaseService) InsertOrder(order types.Order) error {
@@ -49,10 +57,11 @@ func (s *SupabaseService) InsertOrder(order types.Order) error {
 		IsMargin:         &order.IsMargin,
 		IsIsolated:       &order.IsIsolated,
 		IsFutures:        &order.IsFutures,
-		OrderUuid:        ptrStr(order.UUID),
-		ActualOrderId:    ptrInt64(int64(order.ActualOrderId)),
+		OrderUuid:          ptrStr(order.UUID),
+		ActualOrderId:      ptrInt64(int64(order.ActualOrderId)),
+		StrategyInstanceId: ptrStr(order.StrategyInstanceID),
 	}
-	_, _, err := s.client.From("orders").Upsert(row, "user_id,order_id", "", "").Execute()
+	_, _, err := s.client.From(s.table("orders")).Upsert(row, "user_id,order_id", "", "").Execute()
 	if err != nil {
 		return fmt.Errorf("supabase upsert order: %w", err)
 	}
@@ -84,7 +93,7 @@ func (s *SupabaseService) InsertTrade(trade types.Trade) error {
 		OrderUuid:          ptrStr(trade.OrderUUID),
 		Pnl:           &pnlStr,
 	}
-	_, _, err := s.client.From("trades").Upsert(row, "user_id,trade_id", "", "").Execute()
+	_, _, err := s.client.From(s.table("trades")).Upsert(row, "user_id,trade_id", "", "").Execute()
 	if err != nil {
 		return fmt.Errorf("supabase upsert trade: %w", err)
 	}
@@ -120,7 +129,7 @@ func (s *SupabaseService) InsertProfit(profit types.Profit) error {
 		Fee:                ptrStr(profit.Fee.String()),
 		FeeCurrency:        ptrStr(profit.FeeCurrency),
 	}
-	_, _, err := s.client.From("profits").Upsert(row, "user_id,trade_id", "", "").Execute()
+	_, _, err := s.client.From(s.table("profits")).Upsert(row, "user_id,trade_id", "", "").Execute()
 	if err != nil {
 		return fmt.Errorf("supabase upsert profit: %w", err)
 	}
@@ -149,9 +158,201 @@ func (s *SupabaseService) InsertPosition(
 		Side:               ptrStr(trade.Side.String()),
 		TradedAt:           trade.Time.Time().Format(time.RFC3339Nano),
 	}
-	_, _, err := s.client.From("positions").Upsert(row, "user_id,trade_id,side,exchange", "", "").Execute()
+	_, _, err := s.client.From(s.table("positions")).Upsert(row, "user_id,trade_id,side,exchange", "", "").Execute()
 	if err != nil {
 		return fmt.Errorf("supabase upsert position: %w", err)
+	}
+	return nil
+}
+
+func (s *SupabaseService) InsertNavHistory(
+	session string, exchange types.ExchangeName, subAccount string,
+	isMargin, isIsolatedMargin bool, isolatedMarginSymbol string,
+	a asset.Asset,
+) error {
+	row := map[string]interface{}{
+		"user_id":          s.userID,
+		"session":          session,
+		"exchange":         exchange.String(),
+		"subaccount":       subAccount,
+		"time":             a.Time.UTC().Format(time.RFC3339Nano),
+		"currency":         a.Currency,
+		"net_asset_in_usd": a.NetAssetInUSD.String(),
+		"net_asset_in_btc": a.NetAssetInBTC.String(),
+		"balance":          a.Total.String(),
+		"available":        a.Available.String(),
+		"locked":           a.Locked.String(),
+		"borrowed":         a.Borrowed.String(),
+		"net_asset":        a.NetAsset.String(),
+		"price_in_usd":     a.PriceInUSD.String(),
+		"interest":         a.Interest.String(),
+		"is_margin":        isMargin,
+		"is_isolated":      isIsolatedMargin,
+		"isolated_symbol":  isolatedMarginSymbol,
+	}
+	_, _, err := s.client.From(s.table("nav_history_details")).Insert(row, false, "", "", "").Execute()
+	if err != nil {
+		return fmt.Errorf("supabase insert nav_history: %w", err)
+	}
+	return nil
+}
+
+func (s *SupabaseService) InsertReward(reward types.Reward) error {
+	row := map[string]interface{}{
+		"user_id":     s.userID,
+		"exchange":    reward.Exchange.String(),
+		"uuid":        reward.UUID,
+		"reward_type": string(reward.Type),
+		"currency":    reward.Currency,
+		"quantity":    reward.Quantity.String(),
+		"state":       reward.State,
+		"note":        reward.Note,
+		"spent":       reward.Spent,
+		"created_at":  reward.CreatedAt.Time().Format(time.RFC3339Nano),
+	}
+	_, _, err := s.client.From(s.table("rewards")).Upsert(row, "user_id,uuid", "", "").Execute()
+	if err != nil {
+		return fmt.Errorf("supabase upsert reward: %w", err)
+	}
+	return nil
+}
+
+func (s *SupabaseService) InsertWithdraw(withdrawal types.Withdraw) error {
+	row := map[string]interface{}{
+		"user_id":          s.userID,
+		"exchange":         withdrawal.Exchange.String(),
+		"asset":            withdrawal.Asset,
+		"network":          withdrawal.Network,
+		"address":          withdrawal.Address,
+		"amount":           withdrawal.Amount.String(),
+		"txn_id":           withdrawal.TransactionID,
+		"txn_fee":          withdrawal.TransactionFee.String(),
+		"txn_fee_currency": withdrawal.TransactionFeeCurrency,
+		"time":             withdrawal.ApplyTime.Time().Format(time.RFC3339Nano),
+	}
+	_, _, err := s.client.From(s.table("withdraws")).Upsert(row, "user_id,txn_id", "", "").Execute()
+	if err != nil {
+		return fmt.Errorf("supabase upsert withdraw: %w", err)
+	}
+	return nil
+}
+
+func (s *SupabaseService) InsertDeposit(deposit types.Deposit) error {
+	row := map[string]interface{}{
+		"user_id":  s.userID,
+		"exchange": deposit.Exchange.String(),
+		"asset":    deposit.Asset,
+		"address":  deposit.Address,
+		"amount":   deposit.Amount.String(),
+		"txn_id":   deposit.TransactionID,
+		"time":     deposit.Time.Time().Format(time.RFC3339Nano),
+	}
+	_, _, err := s.client.From(s.table("deposits")).Upsert(row, "user_id,txn_id", "", "").Execute()
+	if err != nil {
+		return fmt.Errorf("supabase upsert deposit: %w", err)
+	}
+	return nil
+}
+
+func (s *SupabaseService) InsertMarginLoan(loan types.MarginLoan) error {
+	row := map[string]interface{}{
+		"user_id":         s.userID,
+		"exchange":        loan.Exchange.String(),
+		"transaction_id":  loan.TransactionID,
+		"asset":           loan.Asset,
+		"isolated_symbol": loan.IsolatedSymbol,
+		"principle":       loan.Principle.String(),
+		"time":            loan.Time.Time().Format(time.RFC3339Nano),
+	}
+	_, _, err := s.client.From(s.table("margin_loans")).Upsert(row, "user_id,transaction_id", "", "").Execute()
+	if err != nil {
+		return fmt.Errorf("supabase upsert margin_loan: %w", err)
+	}
+	return nil
+}
+
+func (s *SupabaseService) InsertMarginRepay(repay types.MarginRepay) error {
+	row := map[string]interface{}{
+		"user_id":         s.userID,
+		"exchange":        repay.Exchange.String(),
+		"transaction_id":  repay.TransactionID,
+		"asset":           repay.Asset,
+		"isolated_symbol": repay.IsolatedSymbol,
+		"principle":       repay.Principle.String(),
+		"time":            repay.Time.Time().Format(time.RFC3339Nano),
+	}
+	_, _, err := s.client.From(s.table("margin_repays")).Upsert(row, "user_id,transaction_id", "", "").Execute()
+	if err != nil {
+		return fmt.Errorf("supabase upsert margin_repay: %w", err)
+	}
+	return nil
+}
+
+func (s *SupabaseService) InsertMarginInterest(interest types.MarginInterest) error {
+	row := map[string]interface{}{
+		"user_id":         s.userID,
+		"exchange":        interest.Exchange.String(),
+		"asset":           interest.Asset,
+		"isolated_symbol": interest.IsolatedSymbol,
+		"principle":       interest.Principle.String(),
+		"interest":        interest.Interest.String(),
+		"interest_rate":   interest.InterestRate.String(),
+		"time":            interest.Time.Time().Format(time.RFC3339Nano),
+	}
+	_, _, err := s.client.From(s.table("margin_interests")).Insert(row, false, "", "", "").Execute()
+	if err != nil {
+		return fmt.Errorf("supabase insert margin_interest: %w", err)
+	}
+	return nil
+}
+
+func (s *SupabaseService) InsertMarginLiquidation(liquidation types.MarginLiquidation) error {
+	row := map[string]interface{}{
+		"user_id":           s.userID,
+		"exchange":          liquidation.Exchange.String(),
+		"symbol":            liquidation.Symbol,
+		"side":              string(liquidation.Side),
+		"order_id":          liquidation.OrderID,
+		"price":             liquidation.Price.String(),
+		"quantity":          liquidation.Quantity.String(),
+		"average_price":     liquidation.AveragePrice.String(),
+		"executed_quantity": liquidation.ExecutedQuantity.String(),
+		"time_in_force":     string(liquidation.TimeInForce),
+		"is_isolated":       liquidation.IsIsolated,
+		"time":              liquidation.UpdatedTime.Time().Format(time.RFC3339Nano),
+	}
+	_, _, err := s.client.From(s.table("margin_liquidations")).Upsert(row, "user_id,order_id", "", "").Execute()
+	if err != nil {
+		return fmt.Errorf("supabase upsert margin_liquidation: %w", err)
+	}
+	return nil
+}
+
+func (s *SupabaseService) InsertPositionRisk(risk types.PositionRisk) error {
+	row := map[string]interface{}{
+		"user_id":                   s.userID,
+		"exchange":                  risk.Exchange.String(),
+		"symbol":                    risk.Symbol,
+		"position_side":             string(risk.PositionSide),
+		"leverage":                  risk.Leverage.String(),
+		"liquidation_price":         risk.LiquidationPrice.String(),
+		"entry_price":               risk.EntryPrice.String(),
+		"mark_price":                risk.MarkPrice.String(),
+		"break_even_price":          risk.BreakEvenPrice.String(),
+		"position_amount":           risk.PositionAmount.String(),
+		"unrealized_pnl":            risk.UnrealizedPnL.String(),
+		"notional":                  risk.Notional.String(),
+		"initial_margin":            risk.InitialMargin.String(),
+		"maint_margin":              risk.MaintMargin.String(),
+		"position_initial_margin":   risk.PositionInitialMargin.String(),
+		"open_order_initial_margin": risk.OpenOrderInitialMargin.String(),
+		"adl":                       risk.Adl.String(),
+		"margin_asset":              risk.MarginAsset,
+		"updated_at":                time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	_, _, err := s.client.From(s.table("futures_position_risks")).Upsert(row, "user_id,symbol,position_side", "", "").Execute()
+	if err != nil {
+		return fmt.Errorf("supabase upsert futures_position_risk: %w", err)
 	}
 	return nil
 }
@@ -159,7 +360,7 @@ func (s *SupabaseService) InsertPosition(
 // --- Read methods ---
 
 func (s *SupabaseService) QueryOrders(options QueryOrdersOptions) ([]AggOrder, error) {
-	q := s.client.From("orders").Select("*", "", false).Eq("user_id", s.userID)
+	q := s.client.From(s.table("orders")).Select("*", "", false).Eq("user_id", s.userID)
 
 	if options.Exchange != "" {
 		q = q.Eq("exchange", string(options.Exchange))
@@ -196,7 +397,7 @@ func (s *SupabaseService) QueryOrders(options QueryOrdersOptions) ([]AggOrder, e
 }
 
 func (s *SupabaseService) QueryTrades(options QueryTradesOptions) ([]types.Trade, error) {
-	q := s.client.From("trades").Select("*", "", false).Eq("user_id", s.userID)
+	q := s.client.From(s.table("trades")).Select("*", "", false).Eq("user_id", s.userID)
 
 	if options.Exchange != "" {
 		q = q.Eq("exchange", string(options.Exchange))
@@ -257,7 +458,7 @@ func (s *SupabaseService) QueryTrades(options QueryTradesOptions) ([]types.Trade
 }
 
 func (s *SupabaseService) LoadTrade(id int64) (*types.Trade, error) {
-	result, _, err := s.client.From("trades").
+	result, _, err := s.client.From(s.table("trades")).
 		Select("*", "", false).
 		Eq("user_id", s.userID).
 		Eq("trade_id", strconv.FormatInt(id, 10)).
@@ -284,7 +485,7 @@ func (s *SupabaseService) LoadTrade(id int64) (*types.Trade, error) {
 }
 
 func (s *SupabaseService) QueryForTradingFeeCurrency(ex types.ExchangeName, symbol, feeCurrency string) ([]types.Trade, error) {
-	q := s.client.From("trades").Select("*", "", false).
+	q := s.client.From(s.table("trades")).Select("*", "", false).
 		Eq("user_id", s.userID).
 		Eq("exchange", string(ex))
 
@@ -313,7 +514,7 @@ func (s *SupabaseService) QueryForTradingFeeCurrency(ex types.ExchangeName, symb
 }
 
 func (s *SupabaseService) QueryTradingVolume(startTime time.Time, options TradingVolumeQueryOptions) ([]TradingVolume, error) {
-	q := s.client.From("trades").Select("traded_at,symbol,exchange,quantity,price", "", false).
+	q := s.client.From(s.table("trades")).Select("traded_at,symbol,exchange,quantity,price", "", false).
 		Eq("user_id", s.userID).
 		Gte("traded_at", startTime.Format(time.RFC3339Nano)).
 		Order("traded_at", &postgrest.OrderOpts{Ascending: true}).
@@ -337,7 +538,7 @@ func (s *SupabaseService) LoadProfit(id int64) (*types.Trade, error) {
 }
 
 func (s *SupabaseService) DeleteProfits(_ context.Context, options ProfitQueryOptions) error {
-	q := s.client.From("profits").Delete("", "").Eq("user_id", s.userID)
+	q := s.client.From(s.table("profits")).Delete("", "").Eq("user_id", s.userID)
 
 	if options.Strategy != "" {
 		q = q.Eq("strategy", options.Strategy)
@@ -363,7 +564,7 @@ func (s *SupabaseService) DeleteProfits(_ context.Context, options ProfitQueryOp
 }
 
 func (s *SupabaseService) LoadPosition(id int64) (*types.Position, error) {
-	result, _, err := s.client.From("positions").
+	result, _, err := s.client.From(s.table("positions")).
 		Select("*", "", false).
 		Eq("user_id", s.userID).
 		Eq("trade_id", strconv.FormatInt(id, 10)).
@@ -397,7 +598,7 @@ func (s *SupabaseService) LoadPosition(id int64) (*types.Position, error) {
 }
 
 func (s *SupabaseService) DeletePositions(_ context.Context, options PositionQueryOptions) error {
-	q := s.client.From("positions").Delete("", "").Eq("user_id", s.userID)
+	q := s.client.From(s.table("positions")).Delete("", "").Eq("user_id", s.userID)
 
 	if options.Strategy != "" {
 		q = q.Eq("strategy", options.Strategy)
@@ -585,7 +786,7 @@ func derefStr(s *string) string {
 
 // NetPosition returns the net position for trades matching the given options.
 func (s *SupabaseService) NetPosition(opts QueryTradesOptions) (float64, error) {
-	q := s.client.From("trades").Select("side,quantity", "", false).
+	q := s.client.From(s.table("trades")).Select("side,quantity", "", false).
 		Eq("user_id", s.userID)
 
 	if opts.Exchange != "" {

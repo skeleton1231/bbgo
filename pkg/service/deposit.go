@@ -13,11 +13,15 @@ import (
 )
 
 type DepositService struct {
-	DB *sqlx.DB
+	DB       *sqlx.DB
+	Supabase *SupabaseService
 }
 
 // Sync syncs the withdraw records into db
 func (s *DepositService) Sync(ctx context.Context, ex types.Exchange, startTime time.Time) error {
+	if s.DB == nil {
+		return nil
+	}
 	isMargin, isFutures, isIsolated, _ := exchange.GetSessionAttributes(ex)
 	if isMargin || isFutures || isIsolated {
 		// only works in spot
@@ -89,6 +93,15 @@ func (s *DepositService) scanRows(rows *sqlx.Rows) (deposits []types.Deposit, er
 	}
 
 	return deposits, rows.Err()
+}
+
+func (s *DepositService) Insert(deposit types.Deposit) error {
+	if s.Supabase != nil {
+		return s.Supabase.InsertDeposit(deposit)
+	}
+	_, err := s.DB.NamedExec(`INSERT INTO deposits (exchange, asset, address, amount, txn_id, time)
+		VALUES (:exchange, :asset, :address, :amount, :txn_id, :time)`, deposit)
+	return err
 }
 
 func SelectLastDeposits(ex types.ExchangeName, limit uint64) sq.SelectBuilder {
