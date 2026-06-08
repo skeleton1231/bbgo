@@ -170,25 +170,25 @@ func (s *SupabaseService) InsertNavHistory(
 	isMargin, isIsolatedMargin bool, isolatedMarginSymbol string,
 	a asset.Asset,
 ) error {
-	row := map[string]interface{}{
-		"user_id":          s.userID,
-		"session":          session,
-		"exchange":         exchange.String(),
-		"subaccount":       subAccount,
-		"time":             a.Time.UTC().Format(time.RFC3339Nano),
-		"currency":         a.Currency,
-		"net_asset_in_usd": a.NetAssetInUSD.String(),
-		"net_asset_in_btc": a.NetAssetInBTC.String(),
-		"balance":          a.Total.String(),
-		"available":        a.Available.String(),
-		"locked":           a.Locked.String(),
-		"borrowed":         a.Borrowed.String(),
-		"net_asset":        a.NetAsset.String(),
-		"price_in_usd":     a.PriceInUSD.String(),
-		"interest":         a.Interest.String(),
-		"is_margin":        isMargin,
-		"is_isolated":      isIsolatedMargin,
-		"isolated_symbol":  isolatedMarginSymbol,
+	row := supabasetypes.PublicNavHistoryDetailsInsert{
+		UserId:         s.userID,
+		Session:        ptrStr(session),
+		Exchange:       ptrStr(exchange.String()),
+		Subaccount:     ptrStr(subAccount),
+		Time:           ptrStr(a.Time.UTC().Format(time.RFC3339Nano)),
+		Currency:       ptrStr(a.Currency),
+		NetAssetInUsd:  ptrStr(a.NetAssetInUSD.String()),
+		NetAssetInBtc:  ptrStr(a.NetAssetInBTC.String()),
+		Balance:        ptrStr(a.Total.String()),
+		Available:      ptrStr(a.Available.String()),
+		Locked:         ptrStr(a.Locked.String()),
+		Borrowed:       ptrStr(a.Borrowed.String()),
+		NetAsset:       ptrStr(a.NetAsset.String()),
+		PriceInUsd:     ptrStr(a.PriceInUSD.String()),
+		Interest:       ptrStr(a.Interest.String()),
+		IsMargin:       &isMargin,
+		IsIsolated:     &isIsolatedMargin,
+		IsolatedSymbol: ptrStr(isolatedMarginSymbol),
 	}
 	_, _, err := s.client.From(s.table("nav_history_details")).Insert(row, false, "", "", "").Execute()
 	if err != nil {
@@ -198,17 +198,17 @@ func (s *SupabaseService) InsertNavHistory(
 }
 
 func (s *SupabaseService) InsertReward(reward types.Reward) error {
-	row := map[string]interface{}{
-		"user_id":     s.userID,
-		"exchange":    reward.Exchange.String(),
-		"uuid":        reward.UUID,
-		"reward_type": string(reward.Type),
-		"currency":    reward.Currency,
-		"quantity":    reward.Quantity.String(),
-		"state":       reward.State,
-		"note":        reward.Note,
-		"spent":       reward.Spent,
-		"created_at":  reward.CreatedAt.Time().Format(time.RFC3339Nano),
+	row := supabasetypes.PublicRewardsInsert{
+		UserId:     s.userID,
+		Exchange:   ptrStr(reward.Exchange.String()),
+		Uuid:       ptrStr(reward.UUID),
+		RewardType: ptrStr(string(reward.Type)),
+		Currency:   ptrStr(reward.Currency),
+		Quantity:   ptrStr(reward.Quantity.String()),
+		State:      ptrStr(reward.State),
+		Note:       ptrStr(reward.Note),
+		Spent:      &reward.Spent,
+		CreatedAt:  ptrStr(reward.CreatedAt.Time().Format(time.RFC3339Nano)),
 	}
 	_, _, err := s.client.From(s.table("rewards")).Upsert(row, "user_id,uuid", "", "").Execute()
 	if err != nil {
@@ -218,17 +218,17 @@ func (s *SupabaseService) InsertReward(reward types.Reward) error {
 }
 
 func (s *SupabaseService) InsertWithdraw(withdrawal types.Withdraw) error {
-	row := map[string]interface{}{
-		"user_id":          s.userID,
-		"exchange":         withdrawal.Exchange.String(),
-		"asset":            withdrawal.Asset,
-		"network":          withdrawal.Network,
-		"address":          withdrawal.Address,
-		"amount":           withdrawal.Amount.String(),
-		"txn_id":           withdrawal.TransactionID,
-		"txn_fee":          withdrawal.TransactionFee.String(),
-		"txn_fee_currency": withdrawal.TransactionFeeCurrency,
-		"time":             withdrawal.ApplyTime.Time().Format(time.RFC3339Nano),
+	row := supabasetypes.PublicWithdrawsInsert{
+		UserId:         s.userID,
+		Exchange:       ptrStr(withdrawal.Exchange.String()),
+		Asset:          ptrStr(withdrawal.Asset),
+		Network:        ptrStr(withdrawal.Network),
+		Address:        ptrStr(withdrawal.Address),
+		Amount:         ptrStr(withdrawal.Amount.String()),
+		TxnId:          ptrStr(withdrawal.TransactionID),
+		TxnFee:         ptrStr(withdrawal.TransactionFee.String()),
+		TxnFeeCurrency: ptrStr(withdrawal.TransactionFeeCurrency),
+		Time:           ptrStr(withdrawal.ApplyTime.Time().Format(time.RFC3339Nano)),
 	}
 	_, _, err := s.client.From(s.table("withdraws")).Upsert(row, "user_id,txn_id", "", "").Execute()
 	if err != nil {
@@ -238,14 +238,14 @@ func (s *SupabaseService) InsertWithdraw(withdrawal types.Withdraw) error {
 }
 
 func (s *SupabaseService) InsertDeposit(deposit types.Deposit) error {
-	row := map[string]interface{}{
-		"user_id":  s.userID,
-		"exchange": deposit.Exchange.String(),
-		"asset":    deposit.Asset,
-		"address":  deposit.Address,
-		"amount":   deposit.Amount.String(),
-		"txn_id":   deposit.TransactionID,
-		"time":     deposit.Time.Time().Format(time.RFC3339Nano),
+	row := supabasetypes.PublicDepositsInsert{
+		UserId:   s.userID,
+		Exchange: ptrStr(deposit.Exchange.String()),
+		Asset:    ptrStr(deposit.Asset),
+		Address:  ptrStr(deposit.Address),
+		Amount:   ptrStr(deposit.Amount.String()),
+		TxnId:    ptrStr(deposit.TransactionID),
+		Time:     ptrStr(deposit.Time.Time().Format(time.RFC3339Nano)),
 	}
 	_, _, err := s.client.From(s.table("deposits")).Upsert(row, "user_id,txn_id", "", "").Execute()
 	if err != nil {
@@ -255,14 +255,14 @@ func (s *SupabaseService) InsertDeposit(deposit types.Deposit) error {
 }
 
 func (s *SupabaseService) InsertMarginLoan(loan types.MarginLoan) error {
-	row := map[string]interface{}{
-		"user_id":         s.userID,
-		"exchange":        loan.Exchange.String(),
-		"transaction_id":  loan.TransactionID,
-		"asset":           loan.Asset,
-		"isolated_symbol": loan.IsolatedSymbol,
-		"principle":       loan.Principle.String(),
-		"time":            loan.Time.Time().Format(time.RFC3339Nano),
+	row := supabasetypes.PublicMarginLoansInsert{
+		UserId:         s.userID,
+		Exchange:       ptrStr(loan.Exchange.String()),
+		TransactionId:  ptrInt64(int64(loan.TransactionID)),
+		Asset:          ptrStr(loan.Asset),
+		IsolatedSymbol: ptrStr(loan.IsolatedSymbol),
+		Principle:      ptrStr(loan.Principle.String()),
+		Time:           ptrStr(loan.Time.Time().Format(time.RFC3339Nano)),
 	}
 	_, _, err := s.client.From(s.table("margin_loans")).Upsert(row, "user_id,transaction_id", "", "").Execute()
 	if err != nil {
@@ -272,14 +272,14 @@ func (s *SupabaseService) InsertMarginLoan(loan types.MarginLoan) error {
 }
 
 func (s *SupabaseService) InsertMarginRepay(repay types.MarginRepay) error {
-	row := map[string]interface{}{
-		"user_id":         s.userID,
-		"exchange":        repay.Exchange.String(),
-		"transaction_id":  repay.TransactionID,
-		"asset":           repay.Asset,
-		"isolated_symbol": repay.IsolatedSymbol,
-		"principle":       repay.Principle.String(),
-		"time":            repay.Time.Time().Format(time.RFC3339Nano),
+	row := supabasetypes.PublicMarginRepaysInsert{
+		UserId:         s.userID,
+		Exchange:       ptrStr(repay.Exchange.String()),
+		TransactionId:  ptrInt64(int64(repay.TransactionID)),
+		Asset:          ptrStr(repay.Asset),
+		IsolatedSymbol: ptrStr(repay.IsolatedSymbol),
+		Principle:      ptrStr(repay.Principle.String()),
+		Time:           ptrStr(repay.Time.Time().Format(time.RFC3339Nano)),
 	}
 	_, _, err := s.client.From(s.table("margin_repays")).Upsert(row, "user_id,transaction_id", "", "").Execute()
 	if err != nil {
@@ -289,15 +289,15 @@ func (s *SupabaseService) InsertMarginRepay(repay types.MarginRepay) error {
 }
 
 func (s *SupabaseService) InsertMarginInterest(interest types.MarginInterest) error {
-	row := map[string]interface{}{
-		"user_id":         s.userID,
-		"exchange":        interest.Exchange.String(),
-		"asset":           interest.Asset,
-		"isolated_symbol": interest.IsolatedSymbol,
-		"principle":       interest.Principle.String(),
-		"interest":        interest.Interest.String(),
-		"interest_rate":   interest.InterestRate.String(),
-		"time":            interest.Time.Time().Format(time.RFC3339Nano),
+	row := supabasetypes.PublicMarginInterestsInsert{
+		UserId:         s.userID,
+		Exchange:       ptrStr(interest.Exchange.String()),
+		Asset:          ptrStr(interest.Asset),
+		IsolatedSymbol: ptrStr(interest.IsolatedSymbol),
+		Principle:      ptrStr(interest.Principle.String()),
+		Interest:       ptrStr(interest.Interest.String()),
+		InterestRate:   ptrStr(interest.InterestRate.String()),
+		Time:           ptrStr(interest.Time.Time().Format(time.RFC3339Nano)),
 	}
 	_, _, err := s.client.From(s.table("margin_interests")).Insert(row, false, "", "", "").Execute()
 	if err != nil {
@@ -307,19 +307,19 @@ func (s *SupabaseService) InsertMarginInterest(interest types.MarginInterest) er
 }
 
 func (s *SupabaseService) InsertMarginLiquidation(liquidation types.MarginLiquidation) error {
-	row := map[string]interface{}{
-		"user_id":           s.userID,
-		"exchange":          liquidation.Exchange.String(),
-		"symbol":            liquidation.Symbol,
-		"side":              string(liquidation.Side),
-		"order_id":          liquidation.OrderID,
-		"price":             liquidation.Price.String(),
-		"quantity":          liquidation.Quantity.String(),
-		"average_price":     liquidation.AveragePrice.String(),
-		"executed_quantity": liquidation.ExecutedQuantity.String(),
-		"time_in_force":     string(liquidation.TimeInForce),
-		"is_isolated":       liquidation.IsIsolated,
-		"time":              liquidation.UpdatedTime.Time().Format(time.RFC3339Nano),
+	row := supabasetypes.PublicMarginLiquidationsInsert{
+		UserId:           s.userID,
+		Exchange:         ptrStr(liquidation.Exchange.String()),
+		Symbol:           ptrStr(liquidation.Symbol),
+		Side:             ptrStr(string(liquidation.Side)),
+		OrderId:          ptrInt64(int64(liquidation.OrderID)),
+		Price:            ptrStr(liquidation.Price.String()),
+		Quantity:         ptrStr(liquidation.Quantity.String()),
+		AveragePrice:     ptrStr(liquidation.AveragePrice.String()),
+		ExecutedQuantity: ptrStr(liquidation.ExecutedQuantity.String()),
+		TimeInForce:      ptrStr(string(liquidation.TimeInForce)),
+		IsIsolated:       &liquidation.IsIsolated,
+		Time:             ptrStr(liquidation.UpdatedTime.Time().Format(time.RFC3339Nano)),
 	}
 	_, _, err := s.client.From(s.table("margin_liquidations")).Upsert(row, "user_id,order_id", "", "").Execute()
 	if err != nil {
@@ -329,26 +329,26 @@ func (s *SupabaseService) InsertMarginLiquidation(liquidation types.MarginLiquid
 }
 
 func (s *SupabaseService) InsertPositionRisk(risk types.PositionRisk) error {
-	row := map[string]interface{}{
-		"user_id":                   s.userID,
-		"exchange":                  risk.Exchange.String(),
-		"symbol":                    risk.Symbol,
-		"position_side":             string(risk.PositionSide),
-		"leverage":                  risk.Leverage.String(),
-		"liquidation_price":         risk.LiquidationPrice.String(),
-		"entry_price":               risk.EntryPrice.String(),
-		"mark_price":                risk.MarkPrice.String(),
-		"break_even_price":          risk.BreakEvenPrice.String(),
-		"position_amount":           risk.PositionAmount.String(),
-		"unrealized_pnl":            risk.UnrealizedPnL.String(),
-		"notional":                  risk.Notional.String(),
-		"initial_margin":            risk.InitialMargin.String(),
-		"maint_margin":              risk.MaintMargin.String(),
-		"position_initial_margin":   risk.PositionInitialMargin.String(),
-		"open_order_initial_margin": risk.OpenOrderInitialMargin.String(),
-		"adl":                       risk.Adl.String(),
-		"margin_asset":              risk.MarginAsset,
-		"updated_at":                time.Now().UTC().Format(time.RFC3339Nano),
+	row := supabasetypes.PublicFuturesPositionRisksInsert{
+		UserId:                 s.userID,
+		Exchange:               ptrStr(risk.Exchange.String()),
+		Symbol:                 ptrStr(risk.Symbol),
+		PositionSide:           ptrStr(string(risk.PositionSide)),
+		Leverage:               ptrStr(risk.Leverage.String()),
+		LiquidationPrice:       ptrStr(risk.LiquidationPrice.String()),
+		EntryPrice:             ptrStr(risk.EntryPrice.String()),
+		MarkPrice:              ptrStr(risk.MarkPrice.String()),
+		BreakEvenPrice:         ptrStr(risk.BreakEvenPrice.String()),
+		PositionAmount:         ptrStr(risk.PositionAmount.String()),
+		UnrealizedPnl:          ptrStr(risk.UnrealizedPnL.String()),
+		Notional:               ptrStr(risk.Notional.String()),
+		InitialMargin:          ptrStr(risk.InitialMargin.String()),
+		MaintMargin:            ptrStr(risk.MaintMargin.String()),
+		PositionInitialMargin:  ptrStr(risk.PositionInitialMargin.String()),
+		OpenOrderInitialMargin: ptrStr(risk.OpenOrderInitialMargin.String()),
+		Adl:                    ptrStr(risk.Adl.String()),
+		MarginAsset:            ptrStr(risk.MarginAsset),
+		UpdatedAt:              ptrStr(time.Now().UTC().Format(time.RFC3339Nano)),
 	}
 	_, _, err := s.client.From(s.table("futures_position_risks")).Upsert(row, "user_id,symbol,position_side", "", "").Execute()
 	if err != nil {

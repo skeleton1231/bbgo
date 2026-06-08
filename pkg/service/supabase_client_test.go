@@ -357,4 +357,229 @@ func TestTablePrefix(t *testing.T) {
 	assert.Equal(t, "paper_trades", paperSvc.table("trades"))
 	assert.Equal(t, "paper_positions", paperSvc.table("positions"))
 	assert.Equal(t, "paper_profits", paperSvc.table("profits"))
+	assert.Equal(t, "paper_nav_history_details", paperSvc.table("nav_history_details"))
+	assert.Equal(t, "paper_rewards", paperSvc.table("rewards"))
+	assert.Equal(t, "paper_withdraws", paperSvc.table("withdraws"))
+	assert.Equal(t, "paper_deposits", paperSvc.table("deposits"))
+	assert.Equal(t, "paper_margin_loans", paperSvc.table("margin_loans"))
+	assert.Equal(t, "paper_margin_repays", paperSvc.table("margin_repays"))
+	assert.Equal(t, "paper_margin_interests", paperSvc.table("margin_interests"))
+	assert.Equal(t, "paper_margin_liquidations", paperSvc.table("margin_liquidations"))
+	assert.Equal(t, "paper_futures_position_risks", paperSvc.table("futures_position_risks"))
+}
+
+func mustMarshalToMap(t *testing.T, v interface{}) map[string]interface{} {
+	t.Helper()
+	b, err := json.Marshal(v)
+	require.NoError(t, err)
+	var m map[string]interface{}
+	require.NoError(t, json.Unmarshal(b, &m))
+	return m
+}
+
+func TestInsertNavHistoryMapping(t *testing.T) {
+	svc := &SupabaseService{userID: "user-nav"}
+	row := supabasetypes.PublicNavHistoryDetailsInsert{
+		UserId:         svc.userID,
+		Session:        ptrStr("main"),
+		Exchange:       ptrStr("binance"),
+		Subaccount:     ptrStr("spot"),
+		Time:           ptrStr("2026-06-08T10:00:00Z"),
+		Currency:       ptrStr("BTC"),
+		NetAssetInUsd:  ptrStr("50000.5"),
+		NetAssetInBtc:  ptrStr("1.2"),
+		Balance:        ptrStr("0.5"),
+		Available:      ptrStr("0.4"),
+		Locked:         ptrStr("0.1"),
+		Borrowed:       ptrStr("0.0"),
+		NetAsset:       ptrStr("0.5"),
+		PriceInUsd:     ptrStr("100001"),
+		Interest:       ptrStr("0.001"),
+		IsMargin:       ptrBool(false),
+		IsIsolated:     ptrBool(false),
+		IsolatedSymbol: ptrStr(""),
+	}
+	m := mustMarshalToMap(t, row)
+	assert.Equal(t, "user-nav", m["user_id"])
+	assert.Equal(t, "main", m["session"])
+	assert.Equal(t, "BTC", m["currency"])
+	assert.Equal(t, "50000.5", m["net_asset_in_usd"])
+	assert.Equal(t, false, m["is_margin"])
+}
+
+func TestInsertRewardMapping(t *testing.T) {
+	svc := &SupabaseService{userID: "user-reward"}
+	row := supabasetypes.PublicRewardsInsert{
+		UserId:     svc.userID,
+		Exchange:   ptrStr("binance"),
+		Uuid:       ptrStr("reward-uuid-1"),
+		RewardType: ptrStr("staking"),
+		Currency:   ptrStr("BNB"),
+		Quantity:   ptrStr("0.5"),
+		State:      ptrStr("confirmed"),
+		Note:       ptrStr(""),
+		Spent:      ptrBool(false),
+		CreatedAt:  ptrStr("2026-06-01T00:00:00Z"),
+	}
+	m := mustMarshalToMap(t, row)
+	assert.Equal(t, "user-reward", m["user_id"])
+	assert.Equal(t, "reward-uuid-1", m["uuid"])
+	assert.Equal(t, "staking", m["reward_type"])
+	assert.Equal(t, "BNB", m["currency"])
+	assert.Equal(t, "0.5", m["quantity"])
+	assert.Equal(t, false, m["spent"])
+}
+
+func TestInsertWithdrawMapping(t *testing.T) {
+	svc := &SupabaseService{userID: "user-wd"}
+	row := supabasetypes.PublicWithdrawsInsert{
+		UserId:         svc.userID,
+		Exchange:       ptrStr("binance"),
+		Asset:          ptrStr("USDT"),
+		Network:        ptrStr("TRX"),
+		Address:        ptrStr("TXYZ123"),
+		Amount:         ptrStr("1000"),
+		TxnId:          ptrStr("tx-001"),
+		TxnFee:         ptrStr("1"),
+		TxnFeeCurrency: ptrStr("USDT"),
+		Time:           ptrStr("2026-06-08T10:00:00Z"),
+	}
+	m := mustMarshalToMap(t, row)
+	assert.Equal(t, "user-wd", m["user_id"])
+	assert.Equal(t, "USDT", m["asset"])
+	assert.Equal(t, "TRX", m["network"])
+	assert.Equal(t, "tx-001", m["txn_id"])
+	assert.Equal(t, "1", m["txn_fee"])
+}
+
+func TestInsertDepositMapping(t *testing.T) {
+	svc := &SupabaseService{userID: "user-dep"}
+	row := supabasetypes.PublicDepositsInsert{
+		UserId:   svc.userID,
+		Exchange: ptrStr("binance"),
+		Asset:    ptrStr("BTC"),
+		Address:  ptrStr("bc1abc"),
+		Amount:   ptrStr("0.5"),
+		TxnId:    ptrStr("tx-dep-001"),
+		Time:     ptrStr("2026-06-08T10:00:00Z"),
+	}
+	m := mustMarshalToMap(t, row)
+	assert.Equal(t, "user-dep", m["user_id"])
+	assert.Equal(t, "BTC", m["asset"])
+	assert.Equal(t, "0.5", m["amount"])
+	assert.Equal(t, "tx-dep-001", m["txn_id"])
+}
+
+func TestInsertMarginLoanMapping(t *testing.T) {
+	svc := &SupabaseService{userID: "user-mloan"}
+	row := supabasetypes.PublicMarginLoansInsert{
+		UserId:         svc.userID,
+		Exchange:       ptrStr("binance"),
+		TransactionId:  ptrInt64(100001),
+		Asset:          ptrStr("BTC"),
+		IsolatedSymbol: ptrStr("BTCUSDT"),
+		Principle:      ptrStr("0.1"),
+		Time:           ptrStr("2026-06-08T10:00:00Z"),
+	}
+	m := mustMarshalToMap(t, row)
+	assert.Equal(t, "user-mloan", m["user_id"])
+	assert.Equal(t, float64(100001), m["transaction_id"])
+	assert.Equal(t, "BTC", m["asset"])
+	assert.Equal(t, "BTCUSDT", m["isolated_symbol"])
+	assert.Equal(t, "0.1", m["principle"])
+}
+
+func TestInsertMarginRepayMapping(t *testing.T) {
+	svc := &SupabaseService{userID: "user-mrepay"}
+	row := supabasetypes.PublicMarginRepaysInsert{
+		UserId:         svc.userID,
+		Exchange:       ptrStr("binance"),
+		TransactionId:  ptrInt64(200001),
+		Asset:          ptrStr("USDT"),
+		IsolatedSymbol: ptrStr(""),
+		Principle:      ptrStr("5000"),
+		Time:           ptrStr("2026-06-08T10:00:00Z"),
+	}
+	m := mustMarshalToMap(t, row)
+	assert.Equal(t, "user-mrepay", m["user_id"])
+	assert.Equal(t, float64(200001), m["transaction_id"])
+	assert.Equal(t, "USDT", m["asset"])
+	assert.Equal(t, "5000", m["principle"])
+}
+
+func TestInsertMarginInterestMapping(t *testing.T) {
+	svc := &SupabaseService{userID: "user-mint"}
+	row := supabasetypes.PublicMarginInterestsInsert{
+		UserId:         svc.userID,
+		Exchange:       ptrStr("binance"),
+		Asset:          ptrStr("BTC"),
+		IsolatedSymbol: ptrStr("BTCUSDT"),
+		Principle:      ptrStr("0.1"),
+		Interest:       ptrStr("0.0001"),
+		InterestRate:   ptrStr("0.001"),
+		Time:           ptrStr("2026-06-08T10:00:00Z"),
+	}
+	m := mustMarshalToMap(t, row)
+	assert.Equal(t, "user-mint", m["user_id"])
+	assert.Equal(t, "BTC", m["asset"])
+	assert.Equal(t, "0.0001", m["interest"])
+	assert.Equal(t, "0.001", m["interest_rate"])
+}
+
+func TestInsertMarginLiquidationMapping(t *testing.T) {
+	svc := &SupabaseService{userID: "user-mliq"}
+	row := supabasetypes.PublicMarginLiquidationsInsert{
+		UserId:           svc.userID,
+		Exchange:         ptrStr("binance"),
+		Symbol:           ptrStr("BTCUSDT"),
+		Side:             ptrStr("SELL"),
+		OrderId:          ptrInt64(300001),
+		Price:            ptrStr("50000"),
+		Quantity:         ptrStr("0.1"),
+		AveragePrice:     ptrStr("49999"),
+		ExecutedQuantity: ptrStr("0.1"),
+		TimeInForce:      ptrStr("GTC"),
+		IsIsolated:       ptrBool(true),
+		Time:             ptrStr("2026-06-08T10:00:00Z"),
+	}
+	m := mustMarshalToMap(t, row)
+	assert.Equal(t, "user-mliq", m["user_id"])
+	assert.Equal(t, "BTCUSDT", m["symbol"])
+	assert.Equal(t, "SELL", m["side"])
+	assert.Equal(t, float64(300001), m["order_id"])
+	assert.Equal(t, "50000", m["price"])
+	assert.Equal(t, true, m["is_isolated"])
+}
+
+func TestInsertPositionRiskMapping(t *testing.T) {
+	svc := &SupabaseService{userID: "user-risk"}
+	row := supabasetypes.PublicFuturesPositionRisksInsert{
+		UserId:                 svc.userID,
+		Exchange:               ptrStr("binance"),
+		Symbol:                 ptrStr("ETHUSDT"),
+		PositionSide:           ptrStr("LONG"),
+		Leverage:               ptrStr("10"),
+		LiquidationPrice:       ptrStr("2500"),
+		EntryPrice:             ptrStr("3000"),
+		MarkPrice:              ptrStr("3100"),
+		BreakEvenPrice:         ptrStr("3050"),
+		PositionAmount:         ptrStr("1"),
+		UnrealizedPnl:          ptrStr("100"),
+		Notional:               ptrStr("3100"),
+		InitialMargin:          ptrStr("310"),
+		MaintMargin:            ptrStr("155"),
+		PositionInitialMargin:  ptrStr("310"),
+		OpenOrderInitialMargin: ptrStr("0"),
+		Adl:                    ptrStr("1"),
+		MarginAsset:            ptrStr("USDT"),
+		UpdatedAt:              ptrStr("2026-06-08T10:00:00Z"),
+	}
+	m := mustMarshalToMap(t, row)
+	assert.Equal(t, "user-risk", m["user_id"])
+	assert.Equal(t, "ETHUSDT", m["symbol"])
+	assert.Equal(t, "LONG", m["position_side"])
+	assert.Equal(t, "10", m["leverage"])
+	assert.Equal(t, "2500", m["liquidation_price"])
+	assert.Equal(t, "100", m["unrealized_pnl"])
+	assert.Equal(t, "USDT", m["margin_asset"])
 }
