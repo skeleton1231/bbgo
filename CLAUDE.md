@@ -8,10 +8,13 @@ BBGO is a Go-based cryptocurrency trading framework supporting 8 exchanges (Bina
 
 This repo (`skeleton1231/bbgo`, forked from [c9s/bbgo](https://github.com/c9s/bbgo)) is the upstream for the **SaaS deployment** (`saas/` directory). Key SaaS-specific additions:
 
-- **Supabase direct write** (`DB_DRIVER=supabase`) — orders/trades/positions/profits written to Supabase via REST API
+- **Supabase direct write** (`DB_DRIVER=supabase`) — orders/trades/positions/profits written to Supabase via REST API; paper mode writes to `paper_*` tables via `SUPABASE_TABLE_PREFIX`
+- **Paper trade engine** (`pkg/bbgo/paper_trade_exchange.go`) — kline-driven matching engine for simulation mode, deadlock-free callback emission
+- **Strategy instance IDs** (`pkg/instanceid/`) — deterministic instance IDs computed from strategy + symbol + config; propagated to orders/trades for per-instance data isolation
 - **gRPC market data service** — shared `MarketDataService` with 3-layer kline cache (memory → SQLite → API)
 - **Backtest isolation** — per-job config/database to prevent concurrent overwrite
 - **Strategy hardening** — defaults, validation, and nil guards for backtest-crashing strategies
+- **Supabase service parity** — full SQL-mode service alignment (NAV history, rewards, deposits, margin, futures position risks)
 
 Module path: `github.com/c9s/bbgo`
 
@@ -127,13 +130,14 @@ CLI (cmd/bbgo → pkg/cmd)
 
 | Package | Purpose |
 |---------|---------|
-| `pkg/bbgo/` | Core engine: Environment, Trader, Config, strategy registry, OrderExecutor, ExchangeSession |
+| `pkg/bbgo/` | Core engine: Environment, Trader, Config, strategy registry, OrderExecutor, ExchangeSession, paper trade engine |
 | `pkg/types/` | Shared types: Exchange interface, Order, Trade, KLine, Balance, Stream, fixedpoint |
 | `pkg/exchange/` | Exchange adapters (REST + WebSocket); factory in `factory.go`. Each exchange has its own sub-package |
 | `pkg/strategy/` | Built-in strategies (grid2, xmaker, bollmaker, supertrend, etc.) |
 | `pkg/indicator/` | Technical indicators (SMA, EMA, MACD, RSI, Bollinger, etc.) |
 | `pkg/service/` | Persistence and business logic (database, backtest, orders, trades). Includes `supabase_client.go` |
 | `pkg/supabasetypes/` | Auto-generated Go types for Supabase tables (regenerated via `pnpm sb go-types`) |
+| `pkg/instanceid/` | Deterministic strategy instance ID computation (shared by bbgo strategies and SaaS manager) |
 | `pkg/core/` | TradeCollector, order store, KLine driver |
 | `pkg/backtest/` | Backtesting engine |
 | `pkg/server/` | HTTP API and web dashboard server |
@@ -178,6 +182,9 @@ When `DB_DRIVER=supabase` is set (along with `SUPABASE_URL`, `SUPABASE_SERVICE_K
 - **Types**: `pkg/supabasetypes/database_types.go` — auto-generated from Supabase schema
 - **Service**: `pkg/service/supabase_client.go` — InsertOrder/InsertTrade/InsertPosition/InsertProfit + query methods
 - **Tables**: `orders`, `trades`, `positions`, `profits` (match bbgo's original SQLite table design)
+- **Paper tables**: When `SUPABASE_TABLE_PREFIX=paper_` is set, writes go to `paper_orders`, `paper_trades`, etc.
+- **Service parity**: Full SQL-mode alignment includes `nav_history_details`, `rewards`, `withdraws`, `deposits`, `margin_loans`, `margin_repays`, `margin_interests`, `margin_liquidations`, `futures_position_risks`
+- Orders and trades include `strategy_instance_id` for per-instance data isolation
 - Orders use `order_type` column (not `type`) to match bbgo's original schema
 - Multi-tenant via `user_id` column on all tables
 
@@ -200,14 +207,16 @@ pnpm sb types         # regenerate → web/src/lib/supabase/types.ts
 
 ### SaaS-Exposed Strategies (50 of 55+ registered)
 
-The SaaS frontend (`saas/web/src/lib/bbgo/strategies.ts`) exposes 50 strategies across 10 categories. Strategies not in the SaaS frontend (etf, liquditycorr, marketcap, tradingdesk, tri, example/*) are intentionally excluded. 22 strategies are `liveOnly` (blocked from paper/simulation mode). 10 are cross-exchange strategies requiring multiple exchange sessions.
+The SaaS frontend (`saas/web/src/lib/bbgo/strategies.ts`) exposes 50 strategies across 10 categories. Strategy metadata is centralized in the `strategy_registry` Supabase table (defaults, fields, liveOnly, requiresFutures). A code generation script (`saas/web/scripts/gen_strategy_types.mjs`) produces `saas/manager/strategy_types.go` from the frontend definitions. Strategies not in the SaaS frontend (etf, liquditycorr, marketcap, tradingdesk, tri, example/*) are intentionally excluded. 22 strategies are `liveOnly` (blocked from paper/simulation mode). 10 are cross-exchange strategies requiring multiple exchange sessions.
 
 When adding a new strategy to the SaaS:
 1. Register in bbgo via `bbgo.RegisterStrategy(ID, &Strategy{})`
 2. Add `StrategySchema` entry to `STRATEGY_SCHEMAS` in `saas/web/src/lib/bbgo/strategies.ts`
-3. If live-only, add to `liveOnlyStrategies` map in `saas/manager/user.go`
-4. If cross-exchange, define `sessionRoles` in the schema entry
-5. If renaming an old ID, add alias to `legacyStrategyAliases` in `saas/manager/user.go`
+3. Regenerate Go types: `cd saas/web && pnpm gen-strategy-types`
+4. Insert into `strategy_registry` Supabase table with defaults and field definitions
+5. If live-only, set `live_only = true` in `strategy_registry`
+6. If cross-exchange, define `sessionRoles` in the schema entry
+7. If renaming an old ID, add alias to `legacyStrategyAliases` in `saas/manager/user.go`
 
 ## Build Tag Constraints
 
@@ -219,7 +228,7 @@ The `saas/` directory contains the multi-tenant deployment layer. See `saas/CLAU
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
-| Manager | `saas/manager/` | Go HTTP server for container orchestration, data sync, backtests |
+| Manager | `saas/manager/` | Go HTTP server for per-instance container orchestration, data sync, backtests |
 | Web | `saas/web/` | Next.js 16 dashboard frontend |
 | Docker | `saas/docker/` | Dockerfiles and docker-compose for backend services |
-| Migrations | `saas/web/supabase/migrations/` | Supabase schema migrations |
+| Migrations | `saas/web/supabase/migrations/` | Supabase schema migrations (23 migrations covering live/paper tables, strategy registry, realtime) |
