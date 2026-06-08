@@ -496,6 +496,7 @@ func (s *Server) ListenAndServe(bind string) error {
 	if err != nil {
 		return errors.Wrapf(err, "failed to bind network at %s", bind)
 	}
+	log.Infof("gRPC server listening on %s", bind)
 
 	var klineCache *KLineCache
 	if s.KLineDBPath != "" {
