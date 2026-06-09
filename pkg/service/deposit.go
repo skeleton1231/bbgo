@@ -68,6 +68,9 @@ func (s *DepositService) Sync(ctx context.Context, ex types.Exchange, startTime 
 }
 
 func (s *DepositService) Query(exchangeName types.ExchangeName) ([]types.Deposit, error) {
+	if s.Supabase != nil {
+		return s.Supabase.QueryDeposits(string(exchangeName))
+	}
 	args := map[string]interface{}{
 		"exchange": exchangeName,
 	}

@@ -87,6 +87,13 @@ func (s *RewardService) AggregateUnspentCurrencyPosition(ctx context.Context, ex
 }
 
 func (s *RewardService) QueryUnspentSince(ctx context.Context, ex types.ExchangeName, since time.Time, rewardTypes ...types.RewardType) ([]types.Reward, error) {
+	if s.Supabase != nil {
+		var rt []string
+		for _, t := range rewardTypes {
+			rt = append(rt, string(t))
+		}
+		return s.Supabase.QueryRewards(string(ex), &since, true, len(rewardTypes) == 0, rt)
+	}
 	sql := "SELECT * FROM rewards WHERE created_at >= :since AND exchange = :exchange AND spent IS FALSE "
 
 	if len(rewardTypes) == 0 {
@@ -115,6 +122,13 @@ func (s *RewardService) QueryUnspentSince(ctx context.Context, ex types.Exchange
 }
 
 func (s *RewardService) QueryUnspent(ctx context.Context, ex types.ExchangeName, rewardTypes ...types.RewardType) ([]types.Reward, error) {
+	if s.Supabase != nil {
+		var rt []string
+		for _, t := range rewardTypes {
+			rt = append(rt, string(t))
+		}
+		return s.Supabase.QueryRewards(string(ex), nil, true, len(rewardTypes) == 0, rt)
+	}
 	sql := "SELECT * FROM rewards WHERE exchange = :exchange AND spent IS FALSE "
 	if len(rewardTypes) == 0 {
 		sql += " AND `reward_type` NOT IN ('airdrop') "
@@ -139,6 +153,9 @@ func (s *RewardService) QueryUnspent(ctx context.Context, ex types.ExchangeName,
 }
 
 func (s *RewardService) MarkCurrencyAsSpent(ctx context.Context, currency string) error {
+	if s.Supabase != nil {
+		return s.Supabase.MarkRewardCurrencyAsSpent(currency)
+	}
 	result, err := s.DB.NamedExecContext(ctx, "UPDATE `rewards` SET `spent` = TRUE WHERE `currency` = :currency AND `spent` IS FALSE", map[string]interface{}{
 		"currency": currency,
 	})
@@ -152,6 +169,9 @@ func (s *RewardService) MarkCurrencyAsSpent(ctx context.Context, currency string
 }
 
 func (s *RewardService) MarkAsSpent(ctx context.Context, uuid string) error {
+	if s.Supabase != nil {
+		return s.Supabase.MarkRewardAsSpent(uuid)
+	}
 	result, err := s.DB.NamedExecContext(ctx, "UPDATE `rewards` SET `spent` = TRUE WHERE `uuid` = :uuid", map[string]interface{}{
 		"uuid": uuid,
 	})

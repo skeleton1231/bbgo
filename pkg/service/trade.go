@@ -82,6 +82,9 @@ func (s *TradeService) Sync(
 	exchange types.Exchange, symbol string,
 	startTime, endTime time.Time,
 ) error {
+	if s.Supabase != nil {
+		return nil
+	}
 	if s.DB == nil {
 		return nil
 	}
@@ -588,11 +591,11 @@ func (s *TradeService) Insert(trade types.Trade) error {
 	return err
 }
 
-// UpdateStrategy writes a trade's strategy field. For Supabase it uses upsert;
-// for SQLite/MySQL it does a targeted UPDATE to avoid duplicate-key errors.
+// UpdateStrategy writes a trade's strategy field. For Supabase it uses a targeted
+// UPDATE (not upsert) to avoid overwriting is_futures/is_margin set by the session writer.
 func (s *TradeService) UpdateStrategy(trade types.Trade) error {
 	if s.Supabase != nil {
-		return s.Supabase.InsertTrade(trade)
+		return s.Supabase.UpdateTradeStrategy(trade)
 	}
 	if s.DB == nil {
 		return nil
@@ -602,6 +605,12 @@ func (s *TradeService) UpdateStrategy(trade types.Trade) error {
 }
 
 func (s *TradeService) DeleteAll() error {
+	if s.Supabase != nil {
+		return nil
+	}
+	if s.DB == nil {
+		return nil
+	}
 	_, err := s.DB.Exec(`DELETE FROM trades`)
 	return err
 }

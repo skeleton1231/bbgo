@@ -86,6 +86,9 @@ func SelectLastWithdraws(ex types.ExchangeName, limit uint64) sq.SelectBuilder {
 }
 
 func (s *WithdrawService) QueryLast(ex types.ExchangeName, limit int) ([]types.Withdraw, error) {
+	if s.Supabase != nil {
+		return s.Supabase.QueryWithdraws(string(ex), limit)
+	}
 	sql := "SELECT * FROM `withdraws` WHERE `exchange` = :exchange ORDER BY `time` DESC LIMIT :limit"
 	rows, err := s.DB.NamedQuery(sql, map[string]interface{}{
 		"exchange": ex,
@@ -100,6 +103,9 @@ func (s *WithdrawService) QueryLast(ex types.ExchangeName, limit int) ([]types.W
 }
 
 func (s *WithdrawService) Query(exchangeName types.ExchangeName) ([]types.Withdraw, error) {
+	if s.Supabase != nil {
+		return s.Supabase.QueryWithdraws(string(exchangeName), 0)
+	}
 	args := map[string]interface{}{
 		"exchange": exchangeName,
 	}

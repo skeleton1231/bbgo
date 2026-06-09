@@ -99,11 +99,14 @@ func (s *FuturesService) Sync(
 }
 
 func (s *FuturesService) Query(options QueryFuturesPositionRiskOptions) ([]types.PositionRisk, error) {
+	if s.Supabase != nil {
+		return s.Supabase.QueryFuturesPositionRisks(options.Exchange, options.Symbol)
+	}
 	builder := sq.
 		Select("*").
 		From("futures_position_risks").
 		Where(sq.Eq{"exchange": options.Exchange, "symbol": options.Symbol}).
-		OrderBy("update_time DESC")
+		OrderBy("updated_at DESC")
 	sql, args, err := builder.ToSql()
 	if err != nil {
 		return nil, err

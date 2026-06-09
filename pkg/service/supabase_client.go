@@ -100,6 +100,21 @@ func (s *SupabaseService) InsertTrade(trade types.Trade) error {
 	return nil
 }
 
+func (s *SupabaseService) UpdateTradeStrategy(trade types.Trade) error {
+	_, _, err := s.client.From(s.table("trades")).
+		Update(map[string]any{
+			"strategy":             trade.StrategyID.String,
+			"strategy_instance_id": trade.StrategyInstanceID,
+		}, "", "").
+		Eq("user_id", s.userID).
+		Eq("trade_id", fmt.Sprintf("%d", trade.ID)).
+		Execute()
+	if err != nil {
+		return fmt.Errorf("supabase update trade strategy: %w", err)
+	}
+	return nil
+}
+
 func (s *SupabaseService) InsertProfit(profit types.Profit) error {
 	row := supabasetypes.PublicProfitsInsert{
 		UserId:             s.userID,
@@ -733,7 +748,7 @@ func supabaseOrderToOrder(row supabasetypes.PublicOrdersSelect) (types.Order, er
 			Quantity:      parseFixedPoint(row.Quantity),
 			TimeInForce:   types.TimeInForce(strings.ToUpper(row.TimeInForce)),
 		},
-		Exchange:          types.ExchangeName(strings.ToUpper(row.Exchange)),
+		Exchange:          types.ExchangeName(row.Exchange),
 		OrderID:           orderID,
 		UUID:              row.OrderUuid,
 		Status:            types.OrderStatus(strings.ToUpper(row.Status)),
@@ -767,7 +782,7 @@ func supabaseTradeToTrade(row supabasetypes.PublicTradesSelect) (types.Trade, er
 		ID:            tradeID,
 		OrderID:       orderID,
 		OrderUUID:     row.OrderUuid,
-		Exchange:      types.ExchangeName(strings.ToUpper(row.Exchange)),
+		Exchange:      types.ExchangeName(row.Exchange),
 		Price:         parseFixedPoint(row.Price),
 		Quantity:      parseFixedPoint(row.Quantity),
 		QuoteQuantity: parseFixedPoint(derefStr(row.QuoteQuantity)),
@@ -915,6 +930,208 @@ func (s *SupabaseService) NetPosition(opts QueryTradesOptions) (float64, error) 
 	}
 	return net, nil
 }
+
+// QueryRewards returns rewards matching the given filters.
+func (s *SupabaseService) QueryRewards(exchange string, since *time.Time, unspentOnly bool, excludeAirdrop bool, rewardTypes []string) ([]types.Reward, error) {
+	q := s.client.From(s.table("rewards")).Select("*", "", false).Eq("user_id", s.userID)
+	if exchange != "" {
+		q = q.Eq("exchange", exchange)
+	}
+	if since != nil {
+		q = q.Gte("created_at", since.Format(time.RFC3339Nano))
+	}
+	if unspentOnly {
+		q = q.Eq("spent", "false")
+	}
+	if excludeAirdrop && len(rewardTypes) == 0 {
+		q = q.Neq("reward_type", "airdrop")
+	}
+	if len(rewardTypes) > 0 {
+		q = q.In("reward_type", rewardTypes)
+	}
+	q = q.Order("created_at", &postgrest.OrderOpts{Ascending: true})
+
+	data, _, err := q.Execute()
+	if err != nil {
+		return nil, fmt.Errorf("supabase query rewards: %w", err)
+	}
+	var rows []supabasetypes.PublicRewardsSelect
+	if err := json.Unmarshal(data, &rows); err != nil {
+		return nil, fmt.Errorf("supabase unmarshal rewards: %w", err)
+	}
+
+	rewards := make([]types.Reward, 0, len(rows))
+	for _, r := range rows {
+		createdAt, _ := time.Parse(time.RFC3339Nano, r.CreatedAt)
+		rewards = append(rewards, types.Reward{
+			Exchange:  types.ExchangeName(r.Exchange),
+			UUID:      r.Uuid,
+			Type:      types.RewardType(r.RewardType),
+			Currency:  r.Currency,
+			Quantity:  parseFixedPoint(r.Quantity),
+			State:     r.State,
+			Note:      derefStr(r.Note),
+			Spent:     r.Spent,
+			CreatedAt: types.Time(createdAt),
+		})
+	}
+	return rewards, nil
+}
+
+// MarkRewardCurrencyAsSpent marks all unspent rewards for a currency as spent.
+func (s *SupabaseService) MarkRewardCurrencyAsSpent(currency string) error {
+	_, _, err := s.client.From(s.table("rewards")).Update(map[string]any{"spent": true}, "", "").
+		Eq("user_id", s.userID).
+		Eq("currency", currency).
+		Eq("spent", "false").
+		Execute()
+	if err != nil {
+		return fmt.Errorf("supabase mark reward currency spent: %w", err)
+	}
+	return nil
+}
+
+// MarkRewardAsSpent marks a specific reward as spent by UUID.
+func (s *SupabaseService) MarkRewardAsSpent(uuid string) error {
+	data, _, err := s.client.From(s.table("rewards")).Update(map[string]any{"spent": true}, "", "").
+		Eq("user_id", s.userID).
+		Eq("uuid", uuid).
+		Execute()
+	if err != nil {
+		return fmt.Errorf("supabase mark reward spent: %w", err)
+	}
+	var rows []supabasetypes.PublicRewardsSelect
+	if err := json.Unmarshal(data, &rows); err != nil {
+		return fmt.Errorf("supabase unmarshal reward update: %w", err)
+	}
+	if len(rows) == 0 {
+		return fmt.Errorf("reward uuid:%s not found", uuid)
+	}
+	return nil
+}
+
+// QueryWithdraws returns withdrawals, ordered by time descending when limit > 0, ascending otherwise.
+func (s *SupabaseService) QueryWithdraws(exchange string, limit int) ([]types.Withdraw, error) {
+	q := s.client.From(s.table("withdraws")).Select("*", "", false).Eq("user_id", s.userID)
+	if exchange != "" {
+		q = q.Eq("exchange", exchange)
+	}
+	if limit > 0 {
+		q = q.Order("time", &postgrest.OrderOpts{Ascending: false}).Limit(limit, "")
+	} else {
+		q = q.Order("time", &postgrest.OrderOpts{Ascending: true})
+	}
+
+	data, _, err := q.Execute()
+	if err != nil {
+		return nil, fmt.Errorf("supabase query withdraws: %w", err)
+	}
+	var rows []supabasetypes.PublicWithdrawsSelect
+	if err := json.Unmarshal(data, &rows); err != nil {
+		return nil, fmt.Errorf("supabase unmarshal withdraws: %w", err)
+	}
+
+	withdraws := make([]types.Withdraw, 0, len(rows))
+	for _, r := range rows {
+		t, _ := time.Parse(time.RFC3339Nano, r.Time)
+		withdraws = append(withdraws, types.Withdraw{
+			Exchange:               types.ExchangeName(r.Exchange),
+			Asset:                  r.Asset,
+			Amount:                 parseFixedPoint(r.Amount),
+			Address:                r.Address,
+			TransactionID:          r.TxnId,
+			TransactionFee:         parseFixedPoint(r.TxnFee),
+			TransactionFeeCurrency: r.TxnFeeCurrency,
+			Network:                r.Network,
+			ApplyTime:              types.Time(t),
+		})
+	}
+	return withdraws, nil
+}
+
+// QueryDeposits returns deposits for an exchange, ordered by time ascending.
+func (s *SupabaseService) QueryDeposits(exchange string) ([]types.Deposit, error) {
+	q := s.client.From(s.table("deposits")).Select("*", "", false).
+		Eq("user_id", s.userID).
+		Eq("exchange", exchange).
+		Order("time", &postgrest.OrderOpts{Ascending: true})
+
+	data, _, err := q.Execute()
+	if err != nil {
+		return nil, fmt.Errorf("supabase query deposits: %w", err)
+	}
+	var rows []supabasetypes.PublicDepositsSelect
+	if err := json.Unmarshal(data, &rows); err != nil {
+		return nil, fmt.Errorf("supabase unmarshal deposits: %w", err)
+	}
+
+	deposits := make([]types.Deposit, 0, len(rows))
+	for _, r := range rows {
+		t, _ := time.Parse(time.RFC3339Nano, r.Time)
+		deposits = append(deposits, types.Deposit{
+			Exchange:      types.ExchangeName(r.Exchange),
+			Asset:         r.Asset,
+			Amount:        parseFixedPoint(r.Amount),
+			Address:       r.Address,
+			TransactionID: r.TxnId,
+			Time:          types.Time(t),
+		})
+	}
+	return deposits, nil
+}
+
+// QueryFuturesPositionRisks returns futures position risks for an exchange+symbol.
+func (s *SupabaseService) QueryFuturesPositionRisks(exchange, symbol string) ([]types.PositionRisk, error) {
+	q := s.client.From(s.table("futures_position_risks")).Select("*", "", false).
+		Eq("user_id", s.userID)
+	if exchange != "" {
+		q = q.Eq("exchange", exchange)
+	}
+	if symbol != "" {
+		q = q.Eq("symbol", symbol)
+	}
+	q = q.Order("updated_at", &postgrest.OrderOpts{Ascending: false})
+
+	data, _, err := q.Execute()
+	if err != nil {
+		return nil, fmt.Errorf("supabase query futures position risks: %w", err)
+	}
+	var rows []supabasetypes.PublicFuturesPositionRisksSelect
+	if err := json.Unmarshal(data, &rows); err != nil {
+		return nil, fmt.Errorf("supabase unmarshal futures position risks: %w", err)
+	}
+
+	risks := make([]types.PositionRisk, 0, len(rows))
+	for _, r := range rows {
+		risks = append(risks, types.PositionRisk{
+			Symbol:                 r.Symbol,
+			Exchange:               types.ExchangeName(r.Exchange),
+			PositionSide:           types.PositionType(r.PositionSide),
+			EntryPrice:             parseFixedPoint(r.EntryPrice),
+			Leverage:               parseFixedPoint(r.Leverage),
+			LiquidationPrice:       parseFixedPoint(r.LiquidationPrice),
+			MarkPrice:              parseFixedPoint(r.MarkPrice),
+			BreakEvenPrice:         parseFixedPoint(r.BreakEvenPrice),
+			UnrealizedPnL:          parseFixedPoint(r.UnrealizedPnl),
+			Notional:               parseFixedPoint(r.Notional),
+			InitialMargin:          parseFixedPoint(r.InitialMargin),
+			MaintMargin:            parseFixedPoint(r.MaintMargin),
+			PositionInitialMargin:  parseFixedPoint(r.PositionInitialMargin),
+			OpenOrderInitialMargin: parseFixedPoint(r.OpenOrderInitialMargin),
+			Adl:                    parseFixedPoint(r.Adl),
+			MarginAsset:            r.MarginAsset,
+			PositionAmount:         parseFixedPoint(r.PositionAmount),
+			UpdateTime:             types.MillisecondTimestamp(parseTime(r.UpdatedAt)),
+		})
+	}
+	return risks, nil
+}
+
+func parseTime(s string) time.Time {
+	t, _ := time.Parse(time.RFC3339Nano, s)
+	return t
+}
+
 
 func ptrStr(s string) *string  { return &s }
 func ptrBool(b bool) *bool     { return &b }
