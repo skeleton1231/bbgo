@@ -481,13 +481,12 @@ func (environ *Environment) BindSync(config *SyncConfig) {
 				}
 			}
 
-			switch order.Status {
-			case types.OrderStatusFilled, types.OrderStatusCanceled:
-				if order.ExecutedQuantity.Sign() > 0 {
-					if err := environ.OrderService.Insert(order); err != nil {
-						log.WithError(err).Errorf("order insert error: %+v", order)
-					}
-				}
+			// Persist all order state transitions to Supabase.
+			// Upsert on order_id ensures idempotency: NEW → FILLED updates the same row.
+			// This makes the order book in Supabase complete (including open orders),
+			// enabling frontend queries and state recovery after container restart.
+			if err := environ.OrderService.Insert(order); err != nil {
+				log.WithError(err).Errorf("order insert error: %+v", order)
 			}
 		}
 	}

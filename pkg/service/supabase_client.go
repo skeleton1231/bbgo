@@ -359,6 +359,92 @@ func (s *SupabaseService) InsertPositionRisk(risk types.PositionRisk) error {
 
 // --- Read methods ---
 
+// QueryOpenOrders returns all orders with status NEW from Supabase.
+// Used by PaperTradeExchange to restore in-memory order book on container restart.
+func (s *SupabaseService) QueryOpenOrders(symbol string) ([]types.Order, error) {
+	q := s.client.From(s.table("orders")).Select("*", "", false).
+		Eq("user_id", s.userID).
+		Eq("status", "NEW")
+
+	if symbol != "" {
+		q = q.Eq("symbol", symbol)
+	}
+
+	result, _, err := q.Execute()
+	if err != nil {
+		return nil, fmt.Errorf("supabase query open orders: %w", err)
+	}
+
+	var rows []supabasetypes.PublicOrdersSelect
+	if err := json.Unmarshal(result, &rows); err != nil {
+		return nil, fmt.Errorf("supabase unmarshal open orders: %w", err)
+	}
+
+	orders := make([]types.Order, 0, len(rows))
+	for _, row := range rows {
+		order, err := supabaseOrderToOrder(row)
+		if err != nil {
+			return nil, fmt.Errorf("convert order %s: %w", row.OrderId, err)
+		}
+		orders = append(orders, order)
+	}
+	return orders, nil
+}
+
+// UpsertBalances persists the current balance snapshot to Supabase.
+// Called on every balance change to keep Supabase in sync with the paper trade engine.
+func (s *SupabaseService) UpsertBalances(balances types.BalanceMap) error {
+	rows := make([]map[string]interface{}, 0, len(balances))
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for currency, balance := range balances {
+		rows = append(rows, map[string]interface{}{
+			"user_id":    s.userID,
+			"currency":   currency,
+			"available":  balance.Available.String(),
+			"locked":     balance.Locked.String(),
+			"updated_at": now,
+		})
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	_, _, err := s.client.From(s.table("balances")).Upsert(rows, "user_id,currency", "", "").Execute()
+	if err != nil {
+		return fmt.Errorf("supabase upsert balances: %w", err)
+	}
+	return nil
+}
+
+// QueryBalances loads all persisted balances from Supabase.
+// Used by PaperTradeExchange to restore account state on container restart.
+func (s *SupabaseService) QueryBalances() (types.BalanceMap, error) {
+	result, _, err := s.client.From(s.table("balances")).Select("*", "", false).
+		Eq("user_id", s.userID).
+		Execute()
+	if err != nil {
+		return nil, fmt.Errorf("supabase query balances: %w", err)
+	}
+
+	var rows []struct {
+		Currency  string `json:"currency"`
+		Available string `json:"available"`
+		Locked    string `json:"locked"`
+	}
+	if err := json.Unmarshal(result, &rows); err != nil {
+		return nil, fmt.Errorf("supabase unmarshal balances: %w", err)
+	}
+
+	balances := make(types.BalanceMap)
+	for _, row := range rows {
+		balances[row.Currency] = types.Balance{
+			Currency:  row.Currency,
+			Available: parseFixedPoint(row.Available),
+			Locked:    parseFixedPoint(row.Locked),
+		}
+	}
+	return balances, nil
+}
+
 func (s *SupabaseService) QueryOrders(options QueryOrdersOptions) ([]AggOrder, error) {
 	q := s.client.From(s.table("orders")).Select("*", "", false).Eq("user_id", s.userID)
 

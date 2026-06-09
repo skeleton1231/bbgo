@@ -696,12 +696,22 @@ func (session *ExchangeSession) Init(ctx context.Context, environ *Environment) 
 		})
 	}
 
-		// Feed klines to paper trade matching engine
-		if session.paperTradeExchange != nil {
-			session.MarketDataStream.OnKLineClosed(func(kline types.KLine) {
-				session.paperTradeExchange.OnKLineClosed(kline)
-			})
+	// Restore paper trade state from Supabase (balances + open orders).
+	// Must happen before klines reach the matching engine to avoid duplicate fills.
+	if session.paperTradeExchange != nil {
+		if environ.OrderService != nil && environ.OrderService.Supabase != nil {
+			if err := session.paperTradeExchange.RestoreFromSupabase(ctx, environ.OrderService.Supabase); err != nil {
+				logger.WithError(err).Warn("failed to restore paper trade state from Supabase")
+			}
 		}
+	}
+
+	// Feed klines to paper trade matching engine
+	if session.paperTradeExchange != nil {
+		session.MarketDataStream.OnKLineClosed(func(kline types.KLine) {
+			session.paperTradeExchange.OnKLineClosed(kline)
+		})
+	}
 	session.MarketDataStream.OnMarketTrade(func(trade types.Trade) {
 		session.setLastPrice(trade.Symbol, trade.Price)
 	})
