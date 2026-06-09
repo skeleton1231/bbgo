@@ -8,10 +8,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jmoiron/sqlx"
 	log "github.com/sirupsen/logrus"
 
 	"github.com/c9s/bbgo/pkg/fixedpoint"
-	"github.com/c9s/bbgo/pkg/service"
 	"github.com/c9s/bbgo/pkg/types"
 )
 
@@ -320,7 +320,8 @@ type PaperTradeExchange struct {
 	matchingBooks    map[string]*paperMatchingBook
 	mu               sync.Mutex
 	userDataEmitter  types.StandardStreamEmitter
-	supabaseService  *service.SupabaseService // nil when not in Supabase mode
+	db               *sqlx.DB // nil when not in DB mode
+	tablePrefix      string
 }
 
 func NewPaperTradeExchange(inner types.Exchange, markets types.MarketMap, balances types.BalanceMap) *PaperTradeExchange {
@@ -363,7 +364,7 @@ func (e *PaperTradeExchange) OnKLineClosed(kline types.KLine) {
 
 // BindUserData connects matching engine callbacks to the UserDataStream.
 // Also stores the emitter so lazily-created matching books get bound automatically.
-// When Supabase is configured, adds a balance sync callback to persist every change.
+// When DB is configured, adds a balance sync callback to persist every change.
 func (e *PaperTradeExchange) BindUserData(userDataStream types.StandardStreamEmitter) {
 	e.mu.Lock()
 	e.userDataEmitter = userDataStream
@@ -371,51 +372,45 @@ func (e *PaperTradeExchange) BindUserData(userDataStream types.StandardStreamEmi
 		matching.OnTradeUpdate(userDataStream.EmitTradeUpdate)
 		matching.OnOrderUpdate(userDataStream.EmitOrderUpdate)
 		matching.OnBalanceUpdate(userDataStream.EmitBalanceUpdate)
-		// Persist balance changes to Supabase on every update
-		if e.supabaseService != nil {
-			matching.OnBalanceUpdate(func(types.BalanceMap) { e.syncBalancesToSupabase() })
+		if e.db != nil {
+			matching.OnBalanceUpdate(func(types.BalanceMap) { e.syncBalances() })
 		}
 	}
 	e.mu.Unlock()
 }
 
-// SetSupabaseService enables Supabase persistence for balance sync.
-// Must be called before BindUserData if Supabase is available.
-func (e *PaperTradeExchange) SetSupabaseService(svc *service.SupabaseService) {
-	e.supabaseService = svc
+// SetDB enables DB persistence for balance sync.
+func (e *PaperTradeExchange) SetDB(db *sqlx.DB, tablePrefix string) {
+	e.db = db
+	e.tablePrefix = tablePrefix
 }
 
-// RestoreFromSupabase loads open orders and balances from Supabase into
+// RestoreFromDB loads open orders and balances from the database into
 // the in-memory paper trade engine. Must be called before strategies run
 // so that QueryOpenOrders() returns restored orders and strategies skip
 // re-placing existing grids.
-func (e *PaperTradeExchange) RestoreFromSupabase(ctx context.Context, svc *service.SupabaseService) error {
-	if svc == nil {
+func (e *PaperTradeExchange) RestoreFromDB(ctx context.Context) error {
+	if e.db == nil {
 		return nil
 	}
-	e.supabaseService = svc
 
 	// 1. Restore balances
-	balances, err := svc.QueryBalances()
+	balances, err := e.queryBalances(ctx)
 	if err != nil {
-		log.WithError(err).Warn("paper trade: failed to restore balances from Supabase, using config defaults")
+		log.WithError(err).Warn("paper trade: failed to restore balances from DB, using config defaults")
 	} else if len(balances) > 0 {
 		e.account.UpdateBalances(balances)
-		log.Infof("paper trade: restored %d balances from Supabase", len(balances))
+		log.Infof("paper trade: restored %d balances from DB", len(balances))
 	}
 
 	// 2. Restore open orders.
-	// Orders are added directly to matchingBook bid/ask slices. The book's
-	// OnTradeUpdate/OnOrderUpdate/OnBalanceUpdate callbacks are already wired
-	// (via matchingBook() lazy creation or BindUserData), so when a restored
-	// order is filled by an incoming kline, the book's match() emits correctly.
-	orders, err := svc.QueryOpenOrders("")
+	orders, err := e.queryOpenOrders(ctx, "")
 	if err != nil {
-		log.WithError(err).Warn("paper trade: failed to restore open orders from Supabase")
-		return nil // non-fatal: strategy will re-place orders
+		log.WithError(err).Warn("paper trade: failed to restore open orders from DB")
+		return nil
 	}
 	if len(orders) == 0 {
-		log.Info("paper trade: no open orders to restore from Supabase")
+		log.Info("paper trade: no open orders to restore from DB")
 		return nil
 	}
 
@@ -439,7 +434,6 @@ func (e *PaperTradeExchange) RestoreFromSupabase(ctx context.Context, svc *servi
 		}
 	}
 
-	// Ensure new order IDs won't collide with restored ones
 	for {
 		current := atomic.LoadUint64(&paperOrderID)
 		if maxOrderID <= current || atomic.CompareAndSwapUint64(&paperOrderID, current, maxOrderID) {
@@ -447,19 +441,94 @@ func (e *PaperTradeExchange) RestoreFromSupabase(ctx context.Context, svc *servi
 		}
 	}
 
-	log.Infof("paper trade: restored %d open orders from Supabase (max order ID: %d)", len(orders), maxOrderID)
+	log.Infof("paper trade: restored %d open orders from DB (max order ID: %d)", len(orders), maxOrderID)
 	return nil
 }
 
-// syncBalancesToSupabase writes current balances to Supabase.
-// Called after every balance-changing operation (order placement, fill, cancel).
-func (e *PaperTradeExchange) syncBalancesToSupabase() {
-	if e.supabaseService == nil {
+func (e *PaperTradeExchange) tableName(base string) string {
+	return e.tablePrefix + base
+}
+
+func (e *PaperTradeExchange) queryOpenOrders(ctx context.Context, symbol string) ([]types.Order, error) {
+	tableName := e.tableName("orders")
+	query := "SELECT * FROM " + tableName + " WHERE status IN ('NEW', 'PARTIALLY_FILLED')"
+	var args []interface{}
+	if symbol != "" {
+		query += " AND symbol = $1"
+		args = append(args, symbol)
+	}
+	rows, err := e.db.QueryxContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var orders []types.Order
+	for rows.Next() {
+		var order types.Order
+		if err := rows.StructScan(&order); err != nil {
+			return nil, err
+		}
+		orders = append(orders, order)
+	}
+	return orders, rows.Err()
+}
+
+func (e *PaperTradeExchange) queryBalances(ctx context.Context) (types.BalanceMap, error) {
+	tableName := e.tableName("balances")
+	query := "SELECT * FROM " + tableName
+	rows, err := e.db.QueryxContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	balances := make(types.BalanceMap)
+	for rows.Next() {
+		var b types.Balance
+		if err := rows.StructScan(&b); err != nil {
+			return nil, err
+		}
+		balances[b.Currency] = b
+	}
+	return balances, rows.Err()
+}
+
+// syncBalances writes current balances to the database.
+func (e *PaperTradeExchange) syncBalances() {
+	if e.db == nil {
 		return
 	}
-	if err := e.supabaseService.UpsertBalances(e.account.Balances()); err != nil {
-		log.WithError(err).Warn("paper trade: failed to sync balances to Supabase")
+	if err := e.upsertBalances(); err != nil {
+		log.WithError(err).Warn("paper trade: failed to sync balances to DB")
 	}
+}
+
+func (e *PaperTradeExchange) upsertBalances() error {
+	tableName := e.tableName("balances")
+	balances := e.account.Balances()
+	for currency, b := range balances {
+		if b.Total().IsZero() && b.Available.IsZero() && b.Locked.IsZero() {
+			continue
+		}
+		var sql string
+		switch e.db.DriverName() {
+		case "postgres":
+			sql = `INSERT INTO "` + tableName + `" (currency, total, available, locked) VALUES ($1, $2, $3, $4)
+				ON CONFLICT (currency) DO UPDATE SET total = $2, available = $3, locked = $4`
+			_, err := e.db.Exec(sql, currency, b.Total(), b.Available, b.Locked)
+			if err != nil {
+				return err
+			}
+		default:
+			sql = `INSERT OR REPLACE INTO ` + tableName + ` (currency, total, available, locked) VALUES (?, ?, ?, ?)`
+			_, err := e.db.Exec(sql, currency, b.Total(), b.Available, b.Locked)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (e *PaperTradeExchange) matchingBook(symbol string) (*paperMatchingBook, bool) {
@@ -476,8 +545,8 @@ func (e *PaperTradeExchange) matchingBook(symbol string) (*paperMatchingBook, bo
 				m.OnTradeUpdate(e.userDataEmitter.EmitTradeUpdate)
 				m.OnOrderUpdate(e.userDataEmitter.EmitOrderUpdate)
 				m.OnBalanceUpdate(e.userDataEmitter.EmitBalanceUpdate)
-				if e.supabaseService != nil {
-					m.OnBalanceUpdate(func(types.BalanceMap) { e.syncBalancesToSupabase() })
+				if e.db != nil {
+					m.OnBalanceUpdate(func(types.BalanceMap) { e.syncBalances() })
 				}
 			}
 			e.matchingBooks[symbol] = m

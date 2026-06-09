@@ -1076,6 +1076,7 @@ func (e *OrderTradeUpdateEvent) OrderFutures() (*types.Order, error) {
 		ExecutedQuantity: e.OrderTrade.OrderFilledAccumulatedQuantity,
 		CreationTime:     types.Time(e.OrderTrade.OrderTradeTime.Time()), // FIXME: find the correct field for creation time
 		UpdateTime:       types.Time(e.OrderTrade.OrderTradeTime.Time()),
+		IsFutures:        true,
 	}, nil
 }
 
@@ -1098,6 +1099,7 @@ func (e *OrderTradeUpdateEvent) TradeFutures() (*types.Trade, error) {
 		Time:          types.Time(e.OrderTrade.OrderTradeTime.Time()),
 		Fee:           e.OrderTrade.CommissionAmount,
 		FeeCurrency:   e.OrderTrade.CommissionAsset,
+		IsFutures:     true,
 	}, nil
 }
 

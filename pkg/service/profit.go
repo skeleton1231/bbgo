@@ -12,18 +12,16 @@ import (
 )
 
 type ProfitService struct {
-	DB       *sqlx.DB
-	Supabase *SupabaseService
+	DB          *sqlx.DB
+	TablePrefix string
 }
 
-func (s *ProfitService) Load(ctx context.Context, id int64) (*types.Trade, error) {
-	if s.Supabase != nil {
-		return s.Supabase.LoadProfit(id)
-	}
+func (s *ProfitService) tableName(base string) string { return s.TablePrefix + base }
 
+func (s *ProfitService) Load(ctx context.Context, id int64) (*types.Trade, error) {
 	var trade types.Trade
 
-	rows, err := s.DB.NamedQueryContext(ctx, "SELECT * FROM trades WHERE id = :id", map[string]interface{}{
+	rows, err := s.DB.NamedQueryContext(ctx, "SELECT * FROM "+s.tableName("trades")+" WHERE id = :id", map[string]interface{}{
 		"id": id,
 	})
 	if err != nil {
@@ -41,68 +39,24 @@ func (s *ProfitService) Load(ctx context.Context, id int64) (*types.Trade, error
 }
 
 func (s *ProfitService) Insert(profit types.Profit) error {
-	if s.Supabase != nil {
-		return s.Supabase.InsertProfit(profit)
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	_, err := s.DB.NamedExecContext(ctx, `
-		INSERT INTO profits (
-			strategy,
-			strategy_instance_id,
-			symbol,
-			quote_currency,
-			base_currency,
-			average_cost,
-			profit,
-			net_profit,
-			profit_margin,
-			net_profit_margin,
-			trade_id,
-			price,
-			quantity,
-			quote_quantity,
-			side,
-			is_buyer,
-			is_maker,
-			fee,
-			fee_currency,
-			fee_in_usd,
-			traded_at,
-			exchange,
-			is_margin,
-			is_futures,
-			is_isolated
+	tableName := s.tableName("profits")
+	sql := `
+		INSERT INTO ` + tableName + ` (
+			strategy, strategy_instance_id, symbol, quote_currency, base_currency, average_cost,
+			profit, net_profit, profit_margin, net_profit_margin, trade_id, price, quantity,
+			quote_quantity, side, is_buyer, is_maker, fee, fee_currency, fee_in_usd,
+			traded_at, exchange, is_margin, is_futures, is_isolated
 		) VALUES (
-			:strategy,
-			:strategy_instance_id,
-			:symbol,
-			:quote_currency,
-			:base_currency,
-			:average_cost,
-			:profit,
-			:net_profit,
-			:profit_margin,
-			:net_profit_margin,
-			:trade_id,
-			:price,
-			:quantity,
-			:quote_quantity,
-			:side,
-			:is_buyer,
-			:is_maker,
-			:fee,
-			:fee_currency,
-			:fee_in_usd,
-			:traded_at,
-			:exchange,
-			:is_margin,
-			:is_futures,
-			:is_isolated
-	    )`,
-		profit)
+			:strategy, :strategy_instance_id, :symbol, :quote_currency, :base_currency, :average_cost,
+			:profit, :net_profit, :profit_margin, :net_profit_margin, :trade_id, :price, :quantity,
+			:quote_quantity, :side, :is_buyer, :is_maker, :fee, :fee_currency, :fee_in_usd,
+			:traded_at, :exchange, :is_margin, :is_futures, :is_isolated
+		)`
+
+	_, err := s.DB.NamedExecContext(ctx, sql, profit)
 	return err
 }
 
@@ -115,11 +69,7 @@ type ProfitQueryOptions struct {
 }
 
 func (s *ProfitService) Delete(ctx context.Context, options ProfitQueryOptions) error {
-	if s.Supabase != nil {
-		return s.Supabase.DeleteProfits(ctx, options)
-	}
-
-	del := sq.Delete("profits")
+	del := sq.Delete(s.tableName("profits"))
 	if options.Strategy != "" {
 		del = del.Where(sq.Eq{"strategy": options.Strategy})
 	}

@@ -11,9 +11,11 @@ import (
 )
 
 type AccountService struct {
-	DB       *sqlx.DB
-	Supabase *SupabaseService
+	DB          *sqlx.DB
+	TablePrefix string
 }
+
+func (s *AccountService) tableName(base string) string { return s.TablePrefix + base }
 
 func NewAccountService(db *sqlx.DB) *AccountService {
 	return &AccountService{DB: db}
@@ -25,13 +27,13 @@ func (s *AccountService) InsertAsset(
 	isolatedMarginSymbol string, assets asset.Map,
 ) error {
 	var err error
+	tableName := s.tableName("nav_history_details")
+
 	for _, v := range assets {
 		var _err error
-		if s.Supabase != nil {
-			_err = s.Supabase.InsertNavHistory(session, name, account, isMargin, isIsolatedMargin, isolatedMarginSymbol, v)
-		} else if s.DB != nil {
+		if s.DB != nil {
 			_, _err = s.DB.Exec(`
-				INSERT INTO nav_history_details (
+				INSERT INTO `+tableName+` (
 					session, exchange, subaccount, time, currency,
 					net_asset_in_usd, net_asset_in_btc, balance, available, locked,
 					borrowed, net_asset, price_in_usd,

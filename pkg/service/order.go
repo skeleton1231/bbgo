@@ -18,9 +18,11 @@ import (
 )
 
 type OrderService struct {
-	DB       *sqlx.DB
-	Supabase *SupabaseService
+	DB          *sqlx.DB
+	TablePrefix string
 }
+
+func (s *OrderService) tableName(base string) string { return s.TablePrefix + base }
 
 func (s *OrderService) Sync(
 	ctx context.Context, exchange types.Exchange, symbol string,
@@ -124,11 +126,7 @@ type QueryOrdersOptions struct {
 }
 
 func (s *OrderService) Query(options QueryOrdersOptions) ([]AggOrder, error) {
-	if s.Supabase != nil {
-		return s.Supabase.QueryOrders(options)
-	}
-
-	sql := genOrderSQL(s.DB.DriverName(), options)
+	sql := genOrderSQL(s.DB.DriverName(), s.tableName("orders"), options)
 
 	rows, err := s.DB.NamedQuery(sql, map[string]interface{}{
 		"exchange": options.Exchange,
@@ -144,7 +142,7 @@ func (s *OrderService) Query(options QueryOrdersOptions) ([]AggOrder, error) {
 	return s.scanAggRows(rows)
 }
 
-func genOrderSQL(driver string, options QueryOrdersOptions) string {
+func genOrderSQL(driver string, tableName string, options QueryOrdersOptions) string {
 	// ascending
 	ordering := "ASC"
 	switch v := strings.ToUpper(options.Ordering); v {
@@ -189,9 +187,14 @@ func genOrderSQL(driver string, options QueryOrdersOptions) string {
 	} else {
 		selColumns = append(selColumns, "orders.*")
 	}
-	selColumns = append(selColumns, "IFNULL(SUM(t.price * t.quantity)/SUM(t.quantity), orders.price) AS average_price")
 
-	sql := `SELECT ` + strings.Join(selColumns, ", ") + ` FROM orders` +
+	avgPriceExpr := "IFNULL(SUM(t.price * t.quantity)/SUM(t.quantity), orders.price)"
+	if driver == "postgres" {
+		avgPriceExpr = "COALESCE(SUM(t.price * t.quantity)/NULLIF(SUM(t.quantity), 0), orders.price)"
+	}
+	selColumns = append(selColumns, avgPriceExpr+" AS average_price")
+
+	sql := `SELECT ` + strings.Join(selColumns, ", ") + ` FROM ` + tableName +
 		` LEFT JOIN trades AS t ON (t.order_id = orders.order_id)`
 	if len(where) > 0 {
 		sql += ` WHERE ` + strings.Join(where, " AND ")
@@ -231,22 +234,27 @@ func (s *OrderService) scanRows(rows *sqlx.Rows) (orders []types.Order, err erro
 }
 
 func (s *OrderService) Insert(order types.Order) (err error) {
-	if s.Supabase != nil {
-		return s.Supabase.InsertOrder(order)
-	}
+	tableName := s.tableName("orders")
 
-	if s.DB.DriverName() == "mysql" {
+	switch s.DB.DriverName() {
+	case "mysql":
 		_, err = s.DB.NamedExec(`
-			INSERT INTO orders (exchange, order_id, client_order_id, order_type, status, symbol, price, stop_price, quantity, executed_quantity, side, is_working, time_in_force, created_at, updated_at, is_margin, is_futures, is_isolated, uuid, actual_order_id, strategy_instance_id)
+			INSERT INTO `+"`"+tableName+"`"+` (exchange, order_id, client_order_id, order_type, status, symbol, price, stop_price, quantity, executed_quantity, side, is_working, time_in_force, created_at, updated_at, is_margin, is_futures, is_isolated, uuid, actual_order_id, strategy_instance_id)
 			VALUES (:exchange, :order_id, :client_order_id, :order_type, :status, :symbol, :price, :stop_price, :quantity, :executed_quantity, :side, :is_working, :time_in_force, :created_at, :updated_at, :is_margin, :is_futures, :is_isolated, IF(:uuid != '', UUID_TO_BIN(:uuid, true), ''), :actual_order_id, :strategy_instance_id)
 			ON DUPLICATE KEY UPDATE status=:status, executed_quantity=:executed_quantity, is_working=:is_working, updated_at=:updated_at`, order)
-		return err
-	}
 
-	_, err = s.DB.NamedExec(`
-			INSERT INTO orders (exchange, order_id, client_order_id, order_type, status, symbol, price, stop_price, quantity, executed_quantity, side, is_working, time_in_force, created_at, updated_at, is_margin, is_futures, is_isolated, uuid, actual_order_id, strategy_instance_id)
+	case "postgres":
+		_, err = s.DB.NamedExec(`
+			INSERT INTO "`+tableName+`" (exchange, order_id, client_order_id, order_type, status, symbol, price, stop_price, quantity, executed_quantity, side, is_working, time_in_force, created_at, updated_at, is_margin, is_futures, is_isolated, uuid, actual_order_id, strategy_instance_id)
 			VALUES (:exchange, :order_id, :client_order_id, :order_type, :status, :symbol, :price, :stop_price, :quantity, :executed_quantity, :side, :is_working, :time_in_force, :created_at, :updated_at, :is_margin, :is_futures, :is_isolated, :uuid, :actual_order_id, :strategy_instance_id)
-	`, order)
+			ON CONFLICT (exchange, order_id) DO UPDATE SET status=:status, executed_quantity=:executed_quantity, is_working=:is_working, updated_at=:updated_at`, order)
+
+	default: // sqlite3
+		_, err = s.DB.NamedExec(`
+			INSERT INTO `+"`"+tableName+"`"+` (exchange, order_id, client_order_id, order_type, status, symbol, price, stop_price, quantity, executed_quantity, side, is_working, time_in_force, created_at, updated_at, is_margin, is_futures, is_isolated, uuid, actual_order_id, strategy_instance_id)
+			VALUES (:exchange, :order_id, :client_order_id, :order_type, :status, :symbol, :price, :stop_price, :quantity, :executed_quantity, :side, :is_working, :time_in_force, :created_at, :updated_at, :is_margin, :is_futures, :is_isolated, :uuid, :actual_order_id, :strategy_instance_id)
+		`, order)
+	}
 
 	return err
 }

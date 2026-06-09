@@ -69,9 +69,11 @@ type TradingVolumeQueryOptions struct {
 }
 
 type TradeService struct {
-	DB       *sqlx.DB
-	Supabase *SupabaseService
+	DB          *sqlx.DB
+	TablePrefix string
 }
+
+func (s *TradeService) tableName(base string) string { return s.TablePrefix + base }
 
 func NewTradeService(db *sqlx.DB) *TradeService {
 	return &TradeService{DB: db}
@@ -82,9 +84,6 @@ func (s *TradeService) Sync(
 	exchange types.Exchange, symbol string,
 	startTime, endTime time.Time,
 ) error {
-	if s.Supabase != nil {
-		return nil
-	}
 	if s.DB == nil {
 		return nil
 	}
@@ -155,10 +154,6 @@ func (s *TradeService) Sync(
 }
 
 func (s *TradeService) QueryTradingVolume(startTime time.Time, options TradingVolumeQueryOptions) ([]TradingVolume, error) {
-	if s.Supabase != nil {
-		return s.Supabase.QueryTradingVolume(startTime, options)
-	}
-
 	args := map[string]interface{}{
 		// "symbol":      symbol,
 		// "exchange":    ex,
@@ -167,12 +162,15 @@ func (s *TradeService) QueryTradingVolume(startTime time.Time, options TradingVo
 		"start_time": startTime,
 	}
 
-	sql := ""
+	var sql string
 	driverName := s.DB.DriverName()
-	if driverName == "mysql" {
-		sql = generateMysqlTradingVolumeQuerySQL(options)
-	} else {
-		sql = generateSqliteTradingVolumeSQL(options)
+	switch driverName {
+	case "mysql":
+		sql = generateMysqlTradingVolumeQuerySQL(s.tableName("trades"), options)
+	case "postgres":
+		sql = generatePostgresTradingVolumeSQL(s.tableName("trades"), options)
+	default:
+		sql = generateSqliteTradingVolumeSQL(s.tableName("trades"), options)
 	}
 
 	log.Info(sql)
@@ -203,7 +201,56 @@ func (s *TradeService) QueryTradingVolume(startTime time.Time, options TradingVo
 	return records, rows.Err()
 }
 
-func generateSqliteTradingVolumeSQL(options TradingVolumeQueryOptions) string {
+func generatePostgresTimeRangeClauses(timeRangeColumn, period string) (selectors []string, groupBys []string, orderBys []string) {
+	switch period {
+	case "month":
+		selectors = append(selectors, "EXTRACT(YEAR FROM "+timeRangeColumn+")::int AS year", "EXTRACT(MONTH FROM "+timeRangeColumn+")::int AS month")
+		groupBys = append([]string{"month", "year"}, groupBys...)
+		orderBys = append(orderBys, "year ASC", "month ASC")
+
+	case "year":
+		selectors = append(selectors, "EXTRACT(YEAR FROM "+timeRangeColumn+")::int AS year")
+		groupBys = append([]string{"year"}, groupBys...)
+		orderBys = append(orderBys, "year ASC")
+
+	case "day":
+		fallthrough
+
+	default:
+		selectors = append(selectors, "EXTRACT(YEAR FROM "+timeRangeColumn+")::int AS year", "EXTRACT(MONTH FROM "+timeRangeColumn+")::int AS month", "EXTRACT(DAY FROM "+timeRangeColumn+")::int AS day")
+		groupBys = append([]string{"day", "month", "year"}, groupBys...)
+		orderBys = append(orderBys, "year ASC", "month ASC", "day ASC")
+	}
+
+	return
+}
+
+func generatePostgresTradingVolumeSQL(tableName string, options TradingVolumeQueryOptions) string {
+	timeRangeColumn := "traded_at"
+	sel, groupBys, orderBys := generatePostgresTimeRangeClauses(timeRangeColumn, options.GroupByPeriod)
+
+	switch options.SegmentBy {
+	case "symbol":
+		sel = append(sel, "symbol")
+		groupBys = append([]string{"symbol"}, groupBys...)
+		orderBys = append(orderBys, "symbol")
+	case "exchange":
+		sel = append(sel, "exchange")
+		groupBys = append([]string{"exchange"}, groupBys...)
+		orderBys = append(orderBys, "exchange")
+	}
+
+	sel = append(sel, "SUM(quantity * price) AS quote_volume")
+	where := []string{timeRangeColumn + " > :start_time"}
+	sql := `SELECT ` + strings.Join(sel, ", ") + ` FROM "` + tableName + `"` +
+		` WHERE ` + strings.Join(where, " AND ") +
+		` GROUP BY ` + strings.Join(groupBys, ", ") +
+		` ORDER BY ` + strings.Join(orderBys, ", ")
+
+	return sql
+}
+
+func generateSqliteTradingVolumeSQL(tableName string, options TradingVolumeQueryOptions) string {
 	timeRangeColumn := "traded_at"
 	sel, groupBys, orderBys := generateSqlite3TimeRangeClauses(timeRangeColumn, options.GroupByPeriod)
 
@@ -220,7 +267,7 @@ func generateSqliteTradingVolumeSQL(options TradingVolumeQueryOptions) string {
 
 	sel = append(sel, "SUM(quantity * price) AS quote_volume")
 	where := []string{timeRangeColumn + " > :start_time"}
-	sql := `SELECT ` + strings.Join(sel, ", ") + ` FROM trades` +
+	sql := `SELECT ` + strings.Join(sel, ", ") + ` FROM ` + tableName +
 		` WHERE ` + strings.Join(where, " AND ") +
 		` GROUP BY ` + strings.Join(groupBys, ", ") +
 		` ORDER BY ` + strings.Join(orderBys, ", ")
@@ -276,7 +323,7 @@ func generateMysqlTimeRangeClauses(timeRangeColumn, period string) (selectors []
 	return
 }
 
-func generateMysqlTradingVolumeQuerySQL(options TradingVolumeQueryOptions) string {
+func generateMysqlTradingVolumeQuerySQL(tableName string, options TradingVolumeQueryOptions) string {
 	timeRangeColumn := "traded_at"
 	sel, groupBys, orderBys := generateMysqlTimeRangeClauses(timeRangeColumn, options.GroupByPeriod)
 
@@ -293,7 +340,7 @@ func generateMysqlTradingVolumeQuerySQL(options TradingVolumeQueryOptions) strin
 
 	sel = append(sel, "SUM(quantity * price) AS quote_volume")
 	where := []string{timeRangeColumn + " > :start_time"}
-	sql := `SELECT ` + strings.Join(sel, ", ") + ` FROM trades` +
+	sql := `SELECT ` + strings.Join(sel, ", ") + ` FROM ` + tableName +
 		` WHERE ` + strings.Join(where, " AND ") +
 		` GROUP BY ` + strings.Join(groupBys, ", ") +
 		` ORDER BY ` + strings.Join(orderBys, ", ")
@@ -302,11 +349,8 @@ func generateMysqlTradingVolumeQuerySQL(options TradingVolumeQueryOptions) strin
 }
 
 func (s *TradeService) QueryForTradingFeeCurrency(ex types.ExchangeName, symbol string, feeCurrency string) ([]types.Trade, error) {
-	if s.Supabase != nil {
-		return s.Supabase.QueryForTradingFeeCurrency(ex, symbol, feeCurrency)
-	}
-
-	sql := "SELECT " + strings.Join(genTradeSelectColumns(s.DB.DriverName()), ", ") + " FROM trades WHERE exchange = :exchange AND (symbol = :symbol OR fee_currency = :fee_currency) ORDER BY traded_at ASC"
+	tableName := s.tableName("trades")
+	sql := "SELECT " + strings.Join(genTradeSelectColumns(s.DB.DriverName()), ", ") + " FROM " + tableName + " WHERE exchange = :exchange AND (symbol = :symbol OR fee_currency = :fee_currency) ORDER BY traded_at ASC"
 	rows, err := s.DB.NamedQuery(sql, map[string]interface{}{
 		"exchange":     ex,
 		"symbol":       symbol,
@@ -322,12 +366,8 @@ func (s *TradeService) QueryForTradingFeeCurrency(ex types.ExchangeName, symbol 
 }
 
 func (s *TradeService) Query(options QueryTradesOptions) ([]types.Trade, error) {
-	if s.Supabase != nil {
-		return s.Supabase.QueryTrades(options)
-	}
-
 	sel := sq.Select(genTradeSelectColumns(s.DB.DriverName())...).
-		From("trades")
+		From(s.tableName("trades"))
 
 	if options.LastGID != 0 {
 		sel = sel.Where(sq.Gt{"gid": options.LastGID})
@@ -421,15 +461,10 @@ func (s *TradeService) Query(options QueryTradesOptions) ([]types.Trade, error) 
 	return s.scanRows(rows)
 }
 
-
 // NetPosition returns the net position (total buy quantity - total sell quantity)
 // for trades matching the given options. When opts.Until is set, only trades before
 // that time are included.
 func (s *TradeService) NetPosition(opts QueryTradesOptions) (float64, error) {
-	if s.Supabase != nil {
-		return s.Supabase.NetPosition(opts)
-	}
-
 	castExpr := "CAST(quantity AS REAL)"
 	if s.DB.DriverName() != "sqlite3" {
 		castExpr = "CAST(quantity AS DECIMAL(30,18))"
@@ -440,7 +475,7 @@ func (s *TradeService) NetPosition(opts QueryTradesOptions) (float64, error) {
 		castExpr, castExpr,
 	)
 
-	sel := sq.Select(netExpr).From("trades")
+	sel := sq.Select(netExpr).From(s.tableName("trades"))
 
 	if opts.Exchange != "" {
 		sel = sel.Where(sq.Eq{"exchange": opts.Exchange})
@@ -475,12 +510,8 @@ func (s *TradeService) NetPosition(opts QueryTradesOptions) (float64, error) {
 }
 
 func (s *TradeService) Load(ctx context.Context, id int64) (*types.Trade, error) {
-	if s.Supabase != nil {
-		return s.Supabase.LoadTrade(id)
-	}
-
 	var trade types.Trade
-	query := "SELECT " + strings.Join(genTradeSelectColumns(s.DB.DriverName()), ", ") + " FROM trades WHERE id = :id"
+	query := "SELECT " + strings.Join(genTradeSelectColumns(s.DB.DriverName()), ", ") + " FROM " + s.tableName("trades") + " WHERE id = :id"
 	rows, err := s.DB.NamedQueryContext(ctx, query, map[string]interface{}{
 		"id": id,
 	})
@@ -574,44 +605,47 @@ func (s *TradeService) scanRows(rows *sqlx.Rows) (trades []types.Trade, err erro
 }
 
 func (s *TradeService) Insert(trade types.Trade) error {
-	if s.Supabase != nil {
-		return s.Supabase.InsertTrade(trade)
-	}
+	tableName := s.tableName("trades")
 
-	if s.DB.DriverName() == "mysql" {
+	switch s.DB.DriverName() {
+	case "mysql":
 		_, err := s.DB.NamedExec(`
-			INSERT INTO trades (id, order_id, order_uuid, exchange, price, quantity, quote_quantity, symbol, side, is_buyer, is_maker, traded_at, fee, fee_currency, is_margin, is_futures, is_isolated, strategy, strategy_instance_id, pnl)
+			INSERT INTO `+"`"+tableName+"`"+` (id, order_id, order_uuid, exchange, price, quantity, quote_quantity, symbol, side, is_buyer, is_maker, traded_at, fee, fee_currency, is_margin, is_futures, is_isolated, strategy, strategy_instance_id, pnl)
 			VALUES (:id, :order_id, IF(:order_uuid != '', UUID_TO_BIN(:order_uuid, true), ''), :exchange, :price, :quantity, :quote_quantity, :symbol, :side, :is_buyer, :is_maker, :traded_at, :fee, :fee_currency, :is_margin, :is_futures, :is_isolated, :strategy, :strategy_instance_id, :pnl)
 			ON DUPLICATE KEY UPDATE id=:id, order_id=:order_id, order_uuid=:order_uuid, exchange=:exchange, price=:price, quantity=:quantity, quote_quantity=:quote_quantity, symbol=:symbol, side=:side, is_buyer=:is_buyer, is_maker=:is_maker, traded_at=:traded_at, fee=:fee, fee_currency=:fee_currency, is_margin=:is_margin, is_futures=:is_futures, is_isolated=:is_isolated, strategy=:strategy, pnl=:pnl;`,
 			trade)
 		return err
+
+	case "postgres":
+		_, err := s.DB.NamedExec(`
+			INSERT INTO "`+tableName+`" (id, order_id, order_uuid, exchange, price, quantity, quote_quantity, symbol, side, is_buyer, is_maker, traded_at, fee, fee_currency, is_margin, is_futures, is_isolated, strategy, strategy_instance_id, pnl)
+			VALUES (:id, :order_id, :order_uuid, :exchange, :price, :quantity, :quote_quantity, :symbol, :side, :is_buyer, :is_maker, :traded_at, :fee, :fee_currency, :is_margin, :is_futures, :is_isolated, :strategy, :strategy_instance_id, :pnl)
+			ON CONFLICT (exchange, id) DO UPDATE SET order_id=:order_id, order_uuid=:order_uuid, price=:price, quantity=:quantity, quote_quantity=:quote_quantity, symbol=:symbol, side=:side, is_buyer=:is_buyer, is_maker=:is_maker, traded_at=:traded_at, fee=:fee, fee_currency=:fee_currency, is_margin=:is_margin, is_futures=:is_futures, is_isolated=:is_isolated, strategy=:strategy, pnl=:pnl`,
+			trade)
+		return err
+
+	default: // sqlite3
+		sql := dbCache.InsertSqlOf(trade)
+		_, err := s.DB.NamedExec(sql, trade)
+		return err
 	}
-	sql := dbCache.InsertSqlOf(trade)
-	_, err := s.DB.NamedExec(sql, trade)
-	return err
 }
 
-// UpdateStrategy writes a trade's strategy field. For Supabase it uses a targeted
-// UPDATE (not upsert) to avoid overwriting is_futures/is_margin set by the session writer.
+// UpdateStrategy writes a trade's strategy field.
 func (s *TradeService) UpdateStrategy(trade types.Trade) error {
-	if s.Supabase != nil {
-		return s.Supabase.UpdateTradeStrategy(trade)
-	}
 	if s.DB == nil {
 		return nil
 	}
-	_, err := s.DB.Exec("UPDATE trades SET strategy = ?, strategy_instance_id = ? WHERE id = ?", trade.StrategyID.String, trade.StrategyInstanceID, trade.ID)
+	tableName := s.tableName("trades")
+	_, err := s.DB.Exec("UPDATE "+tableName+" SET strategy = ?, strategy_instance_id = ? WHERE id = ?", trade.StrategyID.String, trade.StrategyInstanceID, trade.ID)
 	return err
 }
 
 func (s *TradeService) DeleteAll() error {
-	if s.Supabase != nil {
-		return nil
-	}
 	if s.DB == nil {
 		return nil
 	}
-	_, err := s.DB.Exec(`DELETE FROM trades`)
+	_, err := s.DB.Exec(`DELETE FROM ` + s.tableName("trades"))
 	return err
 }
 

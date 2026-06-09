@@ -13,9 +13,11 @@ import (
 )
 
 type DepositService struct {
-	DB       *sqlx.DB
-	Supabase *SupabaseService
+	DB          *sqlx.DB
+	TablePrefix string
 }
+
+func (s *DepositService) tableName(base string) string { return s.TablePrefix + base }
 
 // Sync syncs the withdraw records into db
 func (s *DepositService) Sync(ctx context.Context, ex types.Exchange, startTime time.Time) error {
@@ -68,13 +70,11 @@ func (s *DepositService) Sync(ctx context.Context, ex types.Exchange, startTime 
 }
 
 func (s *DepositService) Query(exchangeName types.ExchangeName) ([]types.Deposit, error) {
-	if s.Supabase != nil {
-		return s.Supabase.QueryDeposits(string(exchangeName))
-	}
+	tableName := s.tableName("deposits")
 	args := map[string]interface{}{
 		"exchange": exchangeName,
 	}
-	sql := "SELECT * FROM `deposits` WHERE `exchange` = :exchange ORDER BY `time` ASC"
+	sql := "SELECT * FROM " + tableName + " WHERE exchange = :exchange ORDER BY time ASC"
 	rows, err := s.DB.NamedQuery(sql, args)
 	if err != nil {
 		return nil, err
@@ -99,11 +99,9 @@ func (s *DepositService) scanRows(rows *sqlx.Rows) (deposits []types.Deposit, er
 }
 
 func (s *DepositService) Insert(deposit types.Deposit) error {
-	if s.Supabase != nil {
-		return s.Supabase.InsertDeposit(deposit)
-	}
-	_, err := s.DB.NamedExec(`INSERT INTO deposits (exchange, asset, address, amount, txn_id, time)
-		VALUES (:exchange, :asset, :address, :amount, :txn_id, :time)`, deposit)
+	tableName := s.tableName("deposits")
+	_, err := s.DB.NamedExec(`INSERT INTO `+tableName+` (exchange, asset, address, amount, txn_id, time)
+			VALUES (:exchange, :asset, :address, :amount, :txn_id, :time)`, deposit)
 	return err
 }
 

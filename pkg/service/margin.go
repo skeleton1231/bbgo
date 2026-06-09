@@ -13,43 +13,37 @@ import (
 )
 
 type MarginService struct {
-	DB       *sqlx.DB
-	Supabase *SupabaseService
+	DB          *sqlx.DB
+	TablePrefix string
 }
 
+func (s *MarginService) tableName(base string) string { return s.TablePrefix + base }
+
 func (s *MarginService) InsertLoan(loan types.MarginLoan) error {
-	if s.Supabase != nil {
-		return s.Supabase.InsertMarginLoan(loan)
-	}
-	_, err := s.DB.NamedExec(`INSERT INTO margin_loans (exchange, transaction_id, asset, isolated_symbol, principle, time)
-		VALUES (:exchange, :transaction_id, :asset, :isolated_symbol, :principle, :time)`, loan)
+	tableName := s.tableName("margin_loans")
+	_, err := s.DB.NamedExec(`INSERT INTO `+tableName+` (exchange, transaction_id, asset, isolated_symbol, principle, time)
+			VALUES (:exchange, :transaction_id, :asset, :isolated_symbol, :principle, :time)`, loan)
 	return err
 }
 
 func (s *MarginService) InsertRepay(repay types.MarginRepay) error {
-	if s.Supabase != nil {
-		return s.Supabase.InsertMarginRepay(repay)
-	}
-	_, err := s.DB.NamedExec(`INSERT INTO margin_repays (exchange, transaction_id, asset, isolated_symbol, principle, time)
-		VALUES (:exchange, :transaction_id, :asset, :isolated_symbol, :principle, :time)`, repay)
+	tableName := s.tableName("margin_repays")
+	_, err := s.DB.NamedExec(`INSERT INTO `+tableName+` (exchange, transaction_id, asset, isolated_symbol, principle, time)
+			VALUES (:exchange, :transaction_id, :asset, :isolated_symbol, :principle, :time)`, repay)
 	return err
 }
 
 func (s *MarginService) InsertInterest(interest types.MarginInterest) error {
-	if s.Supabase != nil {
-		return s.Supabase.InsertMarginInterest(interest)
-	}
-	_, err := s.DB.NamedExec(`INSERT INTO margin_interests (exchange, asset, isolated_symbol, principle, interest, interest_rate, time)
-		VALUES (:exchange, :asset, :isolated_symbol, :principle, :interest, :interest_rate, :time)`, interest)
+	tableName := s.tableName("margin_interests")
+	_, err := s.DB.NamedExec(`INSERT INTO `+tableName+` (exchange, asset, isolated_symbol, principle, interest, interest_rate, time)
+			VALUES (:exchange, :asset, :isolated_symbol, :principle, :interest, :interest_rate, :time)`, interest)
 	return err
 }
 
 func (s *MarginService) InsertLiquidation(liquidation types.MarginLiquidation) error {
-	if s.Supabase != nil {
-		return s.Supabase.InsertMarginLiquidation(liquidation)
-	}
-	_, err := s.DB.NamedExec(`INSERT INTO margin_liquidations (exchange, symbol, side, order_id, price, quantity, average_price, executed_quantity, time_in_force, is_isolated, time)
-		VALUES (:exchange, :symbol, :side, :order_id, :price, :quantity, :average_price, :executed_quantity, :time_in_force, :is_isolated, :time)`, liquidation)
+	tableName := s.tableName("margin_liquidations")
+	_, err := s.DB.NamedExec(`INSERT INTO `+tableName+` (exchange, symbol, side, order_id, price, quantity, average_price, executed_quantity, time_in_force, is_isolated, time)
+			VALUES (:exchange, :symbol, :side, :order_id, :price, :quantity, :average_price, :executed_quantity, :time_in_force, :is_isolated, :time)`, liquidation)
 	return err
 }
 

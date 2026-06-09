@@ -18,12 +18,12 @@ import (
 
 // RewardService collects the reward records from the exchange,
 // currently it's only available for MAX exchange.
-// TODO: add summary query for calculating the reward amounts
-// CREATE VIEW reward_summary_by_years AS SELECT YEAR(created_at) as year, reward_type, currency, SUM(quantity) FROM rewards WHERE reward_type != 'airdrop' GROUP BY YEAR(created_at), reward_type, currency ORDER BY year DESC;
 type RewardService struct {
-	DB       *sqlx.DB
-	Supabase *SupabaseService
+	DB          *sqlx.DB
+	TablePrefix string
 }
+
+func (s *RewardService) tableName(base string) string { return s.TablePrefix + base }
 
 func (s *RewardService) Sync(ctx context.Context, exchange types.Exchange, startTime time.Time) error {
 	if s.DB == nil {
@@ -87,23 +87,17 @@ func (s *RewardService) AggregateUnspentCurrencyPosition(ctx context.Context, ex
 }
 
 func (s *RewardService) QueryUnspentSince(ctx context.Context, ex types.ExchangeName, since time.Time, rewardTypes ...types.RewardType) ([]types.Reward, error) {
-	if s.Supabase != nil {
-		var rt []string
-		for _, t := range rewardTypes {
-			rt = append(rt, string(t))
-		}
-		return s.Supabase.QueryRewards(string(ex), &since, true, len(rewardTypes) == 0, rt)
-	}
-	sql := "SELECT * FROM rewards WHERE created_at >= :since AND exchange = :exchange AND spent IS FALSE "
+	tableName := s.tableName("rewards")
+	sql := "SELECT * FROM " + tableName + " WHERE created_at >= :since AND exchange = :exchange AND spent IS FALSE "
 
 	if len(rewardTypes) == 0 {
-		sql += " AND `reward_type` NOT IN ('airdrop') "
+		sql += " AND reward_type NOT IN ('airdrop') "
 	} else {
 		var args []string
 		for _, n := range rewardTypes {
 			args = append(args, strconv.Quote(string(n)))
 		}
-		sql += " AND `reward_type` IN (" + strings.Join(args, ", ") + ") "
+		sql += " AND reward_type IN (" + strings.Join(args, ", ") + ") "
 	}
 
 	sql += " ORDER BY created_at ASC"
@@ -122,22 +116,16 @@ func (s *RewardService) QueryUnspentSince(ctx context.Context, ex types.Exchange
 }
 
 func (s *RewardService) QueryUnspent(ctx context.Context, ex types.ExchangeName, rewardTypes ...types.RewardType) ([]types.Reward, error) {
-	if s.Supabase != nil {
-		var rt []string
-		for _, t := range rewardTypes {
-			rt = append(rt, string(t))
-		}
-		return s.Supabase.QueryRewards(string(ex), nil, true, len(rewardTypes) == 0, rt)
-	}
-	sql := "SELECT * FROM rewards WHERE exchange = :exchange AND spent IS FALSE "
+	tableName := s.tableName("rewards")
+	sql := "SELECT * FROM " + tableName + " WHERE exchange = :exchange AND spent IS FALSE "
 	if len(rewardTypes) == 0 {
-		sql += " AND `reward_type` NOT IN ('airdrop') "
+		sql += " AND reward_type NOT IN ('airdrop') "
 	} else {
 		var args []string
 		for _, n := range rewardTypes {
 			args = append(args, strconv.Quote(string(n)))
 		}
-		sql += " AND `reward_type` IN (" + strings.Join(args, ", ") + ") "
+		sql += " AND reward_type IN (" + strings.Join(args, ", ") + ") "
 	}
 
 	sql += " ORDER BY created_at ASC"
@@ -153,10 +141,8 @@ func (s *RewardService) QueryUnspent(ctx context.Context, ex types.ExchangeName,
 }
 
 func (s *RewardService) MarkCurrencyAsSpent(ctx context.Context, currency string) error {
-	if s.Supabase != nil {
-		return s.Supabase.MarkRewardCurrencyAsSpent(currency)
-	}
-	result, err := s.DB.NamedExecContext(ctx, "UPDATE `rewards` SET `spent` = TRUE WHERE `currency` = :currency AND `spent` IS FALSE", map[string]interface{}{
+	tableName := s.tableName("rewards")
+	result, err := s.DB.NamedExecContext(ctx, "UPDATE "+tableName+" SET spent = TRUE WHERE currency = :currency AND spent IS FALSE", map[string]interface{}{
 		"currency": currency,
 	})
 
@@ -169,10 +155,8 @@ func (s *RewardService) MarkCurrencyAsSpent(ctx context.Context, currency string
 }
 
 func (s *RewardService) MarkAsSpent(ctx context.Context, uuid string) error {
-	if s.Supabase != nil {
-		return s.Supabase.MarkRewardAsSpent(uuid)
-	}
-	result, err := s.DB.NamedExecContext(ctx, "UPDATE `rewards` SET `spent` = TRUE WHERE `uuid` = :uuid", map[string]interface{}{
+	tableName := s.tableName("rewards")
+	result, err := s.DB.NamedExecContext(ctx, "UPDATE "+tableName+" SET spent = TRUE WHERE uuid = :uuid", map[string]interface{}{
 		"uuid": uuid,
 	})
 	if err != nil {
@@ -205,12 +189,10 @@ func (s *RewardService) scanRows(rows *sqlx.Rows) (rewards []types.Reward, err e
 }
 
 func (s *RewardService) Insert(reward types.Reward) error {
-	if s.Supabase != nil {
-		return s.Supabase.InsertReward(reward)
-	}
+	tableName := s.tableName("rewards")
 	_, err := s.DB.NamedExec(`
-			INSERT INTO rewards (exchange, uuid, reward_type, currency, quantity, state, note, created_at)
-			VALUES (:exchange, :uuid, :reward_type, :currency, :quantity, :state, :note, :created_at)`,
+		INSERT INTO `+tableName+` (exchange, uuid, reward_type, currency, quantity, state, note, created_at)
+		VALUES (:exchange, :uuid, :reward_type, :currency, :quantity, :state, :note, :created_at)`,
 		reward)
 	return err
 }

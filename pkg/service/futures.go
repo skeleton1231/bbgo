@@ -8,17 +8,19 @@ import (
 	"time"
 
 	sq "github.com/Masterminds/squirrel"
-	"github.com/c9s/bbgo/pkg/types"
 	"github.com/jmoiron/sqlx"
+	"github.com/c9s/bbgo/pkg/types"
 )
 
 type FuturesService struct {
 	DB                         *sqlx.DB
-	Supabase                   *SupabaseService
+	TablePrefix                string
 	PositionRiskUpdateInterval time.Duration
 
 	positionRiskLastUpdateTime map[string]time.Time
 }
+
+func (s *FuturesService) tableName(base string) string { return s.TablePrefix + base }
 
 func NewFuturesService(db *sqlx.DB) *FuturesService {
 	return &FuturesService{
@@ -99,12 +101,10 @@ func (s *FuturesService) Sync(
 }
 
 func (s *FuturesService) Query(options QueryFuturesPositionRiskOptions) ([]types.PositionRisk, error) {
-	if s.Supabase != nil {
-		return s.Supabase.QueryFuturesPositionRisks(options.Exchange, options.Symbol)
-	}
+	tableName := s.tableName("futures_position_risks")
 	builder := sq.
 		Select("*").
-		From("futures_position_risks").
+		From(tableName).
 		Where(sq.Eq{"exchange": options.Exchange, "symbol": options.Symbol}).
 		OrderBy("updated_at DESC")
 	sql, args, err := builder.ToSql()
@@ -131,29 +131,51 @@ func (s *FuturesService) Query(options QueryFuturesPositionRiskOptions) ([]types
 }
 
 func (s *FuturesService) Insert(risk types.PositionRisk) (err error) {
-	if s.Supabase != nil {
-		return s.Supabase.InsertPositionRisk(risk)
-	}
-	sql := `
-	INSERT INTO futures_position_risks (
-		exchange, symbol, position_side, entry_price, leverage, liquidation_price,
-		mark_price, break_even_price, unrealized_pnl, notional, initial_margin, maint_margin,
-		position_initial_margin, open_order_initial_margin, adl, margin_asset,
-		position_amount, updated_at
-	) VALUES (
-		:exchange, :symbol, :position_side, :entry_price, :leverage, :liquidation_price,
-		:mark_price, :break_even_price, :unrealized_pnl, :notional, :initial_margin, :maint_margin,
-		:position_initial_margin, :open_order_initial_margin, :adl, :margin_asset,
-		:position_amount, :updated_at
-	)`
+	tableName := s.tableName("futures_position_risks")
 
-	if s.DB.DriverName() == "mysql" {
-		sql = fmt.Sprintf(
-			`%s
-		ON DUPLICATE KEY UPDATE exchange=:exchange, symbol=:symbol, position_side=:position_side, updated_at=:updated_at`,
-			sql)
+	switch s.DB.DriverName() {
+	case "mysql":
+		sql := `INSERT INTO ` + tableName + ` (
+			exchange, symbol, position_side, entry_price, leverage, liquidation_price,
+			mark_price, break_even_price, unrealized_pnl, notional, initial_margin, maint_margin,
+			position_initial_margin, open_order_initial_margin, adl, margin_asset,
+			position_amount, updated_at
+		) VALUES (
+			:exchange, :symbol, :position_side, :entry_price, :leverage, :liquidation_price,
+			:mark_price, :break_even_price, :unrealized_pnl, :notional, :initial_margin, :maint_margin,
+			:position_initial_margin, :open_order_initial_margin, :adl, :margin_asset,
+			:position_amount, :updated_at
+		) ON DUPLICATE KEY UPDATE exchange=:exchange, symbol=:symbol, position_side=:position_side, updated_at=:updated_at`
+		_, err = s.DB.NamedExec(sql, risk)
+
+	case "postgres":
+		sql := `INSERT INTO "` + tableName + `" (
+			exchange, symbol, position_side, entry_price, leverage, liquidation_price,
+			mark_price, break_even_price, unrealized_pnl, notional, initial_margin, maint_margin,
+			position_initial_margin, open_order_initial_margin, adl, margin_asset,
+			position_amount, updated_at
+		) VALUES (
+			:exchange, :symbol, :position_side, :entry_price, :leverage, :liquidation_price,
+			:mark_price, :break_even_price, :unrealized_pnl, :notional, :initial_margin, :maint_margin,
+			:position_initial_margin, :open_order_initial_margin, :adl, :margin_asset,
+			:position_amount, :updated_at
+		) ON CONFLICT (exchange, symbol, position_side) DO UPDATE SET updated_at=:updated_at`
+		_, err = s.DB.NamedExec(sql, risk)
+
+	default: // sqlite3
+		sql := `INSERT INTO ` + tableName + ` (
+			exchange, symbol, position_side, entry_price, leverage, liquidation_price,
+			mark_price, break_even_price, unrealized_pnl, notional, initial_margin, maint_margin,
+			position_initial_margin, open_order_initial_margin, adl, margin_asset,
+			position_amount, updated_at
+		) VALUES (
+			:exchange, :symbol, :position_side, :entry_price, :leverage, :liquidation_price,
+			:mark_price, :break_even_price, :unrealized_pnl, :notional, :initial_margin, :maint_margin,
+			:position_initial_margin, :open_order_initial_margin, :adl, :margin_asset,
+			:position_amount, :updated_at
+		)`
+		_, err = s.DB.NamedExec(sql, risk)
 	}
 
-	_, err = s.DB.NamedExec(sql, risk)
 	return err
 }

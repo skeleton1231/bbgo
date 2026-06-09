@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"database/sql"
 	"fmt"
 	"image/png"
 	stdlog "log"
@@ -20,6 +21,8 @@ import (
 	"github.com/slack-go/slack"
 	"github.com/spf13/viper"
 	"gopkg.in/tucnak/telebot.v2"
+	_ "github.com/lib/pq"
+	"github.com/jmoiron/sqlx"
 
 	"github.com/c9s/bbgo/pkg/envvar"
 	"github.com/c9s/bbgo/pkg/exchange"
@@ -273,30 +276,39 @@ func (environ *Environment) ConfigureDatabaseDriver(
 }
 
 func (environ *Environment) configureSupabase() error {
-	url := os.Getenv("SUPABASE_URL")
-	key := os.Getenv("SUPABASE_SERVICE_KEY")
+	dbURL := os.Getenv("SUPABASE_DB_URL")
 	userID := os.Getenv("BBGO_USER_ID")
 
-	if url == "" || key == "" || userID == "" {
-		return fmt.Errorf("supabase mode requires SUPABASE_URL, SUPABASE_SERVICE_KEY, and BBGO_USER_ID env vars")
+	if dbURL == "" || userID == "" {
+		return fmt.Errorf("supabase mode requires SUPABASE_DB_URL and BBGO_USER_ID env vars")
 	}
 
-	supaSvc, err := service.NewSupabaseService(url, key, userID)
+	// Add sslmode=require if not already present
+	if !strings.Contains(dbURL, "sslmode=") {
+		if strings.Contains(dbURL, "?") {
+			dbURL += "&sslmode=require"
+		} else {
+			dbURL += "?sslmode=require"
+		}
+	}
+
+	db, err := sqlx.Connect("postgres", dbURL)
 	if err != nil {
-		return fmt.Errorf("init supabase: %w", err)
+		return fmt.Errorf("connect to supabase postgres: %w", err)
 	}
 
-	log.Infof("using supabase backend for user %s", userID)
+	prefix := os.Getenv("SUPABASE_TABLE_PREFIX")
+	log.Infof("using supabase postgres backend for user %s (prefix=%q)", userID, prefix)
 
-	environ.OrderService = &service.OrderService{Supabase: supaSvc}
-	environ.TradeService = &service.TradeService{Supabase: supaSvc}
-	environ.ProfitService = &service.ProfitService{Supabase: supaSvc}
-	environ.PositionService = &service.PositionService{Supabase: supaSvc}
-	environ.AccountService = &service.AccountService{Supabase: supaSvc}
-	environ.RewardService = &service.RewardService{Supabase: supaSvc}
-	environ.WithdrawService = &service.WithdrawService{Supabase: supaSvc}
-	environ.DepositService = &service.DepositService{Supabase: supaSvc}
-	environ.MarginService = &service.MarginService{Supabase: supaSvc}
+	environ.OrderService = &service.OrderService{DB: db, TablePrefix: prefix}
+	environ.TradeService = &service.TradeService{DB: db, TablePrefix: prefix}
+	environ.ProfitService = &service.ProfitService{DB: db, TablePrefix: prefix}
+	environ.PositionService = &service.PositionService{DB: db, TablePrefix: prefix}
+	environ.AccountService = &service.AccountService{DB: db, TablePrefix: prefix}
+	environ.RewardService = &service.RewardService{DB: db, TablePrefix: prefix}
+	environ.WithdrawService = &service.WithdrawService{DB: db, TablePrefix: prefix}
+	environ.DepositService = &service.DepositService{DB: db, TablePrefix: prefix}
+	environ.MarginService = &service.MarginService{DB: db, TablePrefix: prefix}
 
 	environ.SyncService = &service.SyncService{
 		TradeService:    environ.TradeService,
@@ -305,7 +317,7 @@ func (environ *Environment) configureSupabase() error {
 		MarginService:   environ.MarginService,
 		WithdrawService: environ.WithdrawService,
 		DepositService:  environ.DepositService,
-		FuturesService:  &service.FuturesService{Supabase: supaSvc},
+		FuturesService:  &service.FuturesService{DB: db, TablePrefix: prefix},
 	}
 
 	return nil
@@ -458,8 +470,18 @@ func (environ *Environment) BindSync(config *SyncConfig) {
 				trade.IsIsolated = session.IsolatedFutures
 			}
 
-			// The StrategyID field and the PnL field needs to be updated by the strategy.
-			// trade.StrategyID, trade.PnL
+			if trade.StrategyInstanceID == "" {
+				if id, ok := session.LookupOrderStrategy(trade.OrderID); ok {
+					trade.StrategyInstanceID = id
+				} else if id := os.Getenv("BBGO_STRATEGY_INSTANCE_ID"); id != "" {
+					trade.StrategyInstanceID = id
+				}
+			}
+			if !trade.StrategyID.Valid && trade.StrategyInstanceID != "" {
+				trade.StrategyID = sql.NullString{String: extractStrategyName(trade.StrategyInstanceID), Valid: true}
+			}
+
+			// The PnL field needs to be updated by the strategy.
 			if err := environ.TradeService.Insert(trade); err != nil {
 				log.WithError(err).Errorf("trade insert error: %+v", trade)
 			}
@@ -1249,4 +1271,15 @@ func (session *ExchangeSession) getSessionSymbols(defaultSymbols ...string) ([]s
 
 func defaultSyncSinceTime() time.Time {
 	return time.Now().AddDate(0, -6, 0)
+}
+
+// extractStrategyName returns the strategy name from an instance ID.
+// Instance IDs follow patterns like "grid2-BTCUSDT-..." or "pivotshort:BTCUSDT:1m".
+func extractStrategyName(instanceID string) string {
+	for _, sep := range []string{"-", ":"} {
+		if i := strings.Index(instanceID, sep); i > 0 {
+			return instanceID[:i]
+		}
+	}
+	return instanceID
 }

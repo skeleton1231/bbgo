@@ -14,22 +14,20 @@ import (
 )
 
 type PositionService struct {
-	DB       *sqlx.DB
-	Supabase *SupabaseService
+	DB          *sqlx.DB
+	TablePrefix string
 }
+
+func (s *PositionService) tableName(base string) string { return s.TablePrefix + base }
 
 func NewPositionService(db *sqlx.DB) *PositionService {
 	return &PositionService{DB: db}
 }
 
 func (s *PositionService) Load(ctx context.Context, id int64) (*types.Position, error) {
-	if s.Supabase != nil {
-		return s.Supabase.LoadPosition(id)
-	}
-
 	var pos types.Position
 
-	rows, err := s.DB.NamedQueryContext(ctx, "SELECT * FROM positions WHERE id = :id", map[string]interface{}{
+	rows, err := s.DB.NamedQueryContext(ctx, "SELECT * FROM "+s.tableName("positions")+" WHERE id = :id", map[string]interface{}{
 		"id": id,
 	})
 	if err != nil {
@@ -51,58 +49,45 @@ func (s *PositionService) Insert(
 	trade types.Trade,
 	profit, netProfit fixedpoint.Value,
 ) error {
-	if s.Supabase != nil {
-		return s.Supabase.InsertPosition(position, trade, profit, netProfit)
+	tableName := s.tableName("positions")
+	args := map[string]interface{}{
+		"strategy":             position.Strategy,
+		"strategy_instance_id": position.StrategyInstanceID,
+		"symbol":               position.Symbol,
+		"quote_currency":       position.QuoteCurrency,
+		"base_currency":        position.BaseCurrency,
+		"average_cost":         position.AverageCost,
+		"base":                 position.Base,
+		"quote":                position.Quote,
+		"profit":               profit,
+		"net_profit":           netProfit,
+		"trade_id":             trade.ID,
+		"exchange":             trade.Exchange,
+		"side":                 trade.Side,
+		"traded_at":            trade.Time,
 	}
 
-	_, err := s.DB.NamedExec(`
-		INSERT OR IGNORE INTO positions (
-			strategy,
-			strategy_instance_id,
-			symbol,
-			quote_currency,
-			base_currency,
-			average_cost,
-		   	base,
-		    quote,
-			profit,
-			net_profit,
-			trade_id,
-		    exchange,
-		    side,
-			traded_at
+	var sql string
+	switch s.DB.DriverName() {
+	case "postgres":
+		sql = `INSERT INTO "` + tableName + `" (
+			strategy, strategy_instance_id, symbol, quote_currency, base_currency, average_cost,
+			base, quote, profit, net_profit, trade_id, exchange, side, traded_at
 		) VALUES (
-			:strategy,
-			:strategy_instance_id,
-			:symbol,
-			:quote_currency,
-			:base_currency,
-			:average_cost,
-		    :base,
-		    :quote,
-			:profit,
-			:net_profit,
-			:trade_id,
-		    :exchange,
-		    :side,
-			:traded_at
-	    )`,
-		map[string]interface{}{
-			"strategy":             position.Strategy,
-			"strategy_instance_id": position.StrategyInstanceID,
-			"symbol":               position.Symbol,
-			"quote_currency":       position.QuoteCurrency,
-			"base_currency":        position.BaseCurrency,
-			"average_cost":         position.AverageCost,
-			"base":                 position.Base,
-			"quote":                position.Quote,
-			"profit":               profit,
-			"net_profit":           netProfit,
-			"trade_id":             trade.ID,
-			"exchange":             trade.Exchange,
-			"side":                 trade.Side,
-			"traded_at":            trade.Time,
-		})
+			:strategy, :strategy_instance_id, :symbol, :quote_currency, :base_currency, :average_cost,
+			:base, :quote, :profit, :net_profit, :trade_id, :exchange, :side, :traded_at
+		) ON CONFLICT DO NOTHING`
+	default: // mysql, sqlite3
+		sql = `INSERT OR IGNORE INTO ` + tableName + ` (
+			strategy, strategy_instance_id, symbol, quote_currency, base_currency, average_cost,
+			base, quote, profit, net_profit, trade_id, exchange, side, traded_at
+		) VALUES (
+			:strategy, :strategy_instance_id, :symbol, :quote_currency, :base_currency, :average_cost,
+			:base, :quote, :profit, :net_profit, :trade_id, :exchange, :side, :traded_at
+		)`
+	}
+
+	_, err := s.DB.NamedExec(sql, args)
 	return err
 }
 
@@ -115,11 +100,7 @@ type PositionQueryOptions struct {
 }
 
 func (s *PositionService) Delete(ctx context.Context, options PositionQueryOptions) error {
-	if s.Supabase != nil {
-		return s.Supabase.DeletePositions(ctx, options)
-	}
-
-	del := sq.Delete("positions")
+	del := sq.Delete(s.tableName("positions"))
 	if options.Strategy != "" {
 		del = del.Where(sq.Eq{"strategy": options.Strategy})
 	}

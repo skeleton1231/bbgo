@@ -696,12 +696,13 @@ func (session *ExchangeSession) Init(ctx context.Context, environ *Environment) 
 		})
 	}
 
-	// Restore paper trade state from Supabase (balances + open orders).
+	// Restore paper trade state from database (balances + open orders).
 	// Must happen before klines reach the matching engine to avoid duplicate fills.
 	if session.paperTradeExchange != nil {
-		if environ.OrderService != nil && environ.OrderService.Supabase != nil {
-			if err := session.paperTradeExchange.RestoreFromSupabase(ctx, environ.OrderService.Supabase); err != nil {
-				logger.WithError(err).Warn("failed to restore paper trade state from Supabase")
+		if environ.OrderService != nil && environ.OrderService.DB != nil {
+				session.paperTradeExchange.SetDB(environ.OrderService.DB, environ.OrderService.TablePrefix)
+				if err := session.paperTradeExchange.RestoreFromDB(ctx); err != nil {
+				logger.WithError(err).Warn("failed to restore paper trade state from DB")
 			}
 		}
 	}
