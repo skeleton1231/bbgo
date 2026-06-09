@@ -47,6 +47,8 @@ func Compute(strategy, symbol string, config json.RawMessage) string {
 		return Simple(strategy, symbol)
 	case "atrpin":
 		return Atrpin(symbol, paramString(params, "interval"), paramInt(params, "window"))
+	case "pivotshort":
+		return WithInterval(strategy, symbol, paramString(params, "interval"))
 	case "swing", "flashcrash":
 		return WithInterval(strategy, symbol, paramString(params, "interval"))
 	case "drift", "elliottwave":

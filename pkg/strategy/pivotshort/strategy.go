@@ -67,7 +67,7 @@ func (s *Strategy) Validate() error {
 }
 
 func (s *Strategy) InstanceID() string {
-	return instanceid.Simple(ID, s.Symbol)
+	return instanceid.WithInterval(ID, s.Symbol, string(s.Interval))
 }
 
 func (s *Strategy) Subscribe(session *bbgo.ExchangeSession) {
