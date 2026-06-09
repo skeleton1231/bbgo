@@ -478,6 +478,8 @@ func (environ *Environment) BindSync(config *SyncConfig) {
 			if order.StrategyInstanceID == "" {
 				if id, ok := session.LookupOrderStrategy(order.OrderID); ok {
 					order.StrategyInstanceID = id
+				} else if id := os.Getenv("BBGO_STRATEGY_INSTANCE_ID"); id != "" {
+					order.StrategyInstanceID = id
 				}
 			}
 

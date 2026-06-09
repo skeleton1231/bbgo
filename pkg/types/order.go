@@ -185,6 +185,11 @@ type SubmitOrder struct {
 	// ClosePosition this is mostly designed for binance: true, false；Close-All，used with STOP_MARKET or TAKE_PROFIT_MARKET.
 	ClosePosition bool `json:"closePosition,omitempty" db:"close_position"`
 
+	// StrategyInstanceID is set by the executor to identify which strategy instance this order belongs to.
+	// Copied to Order.StrategyInstanceID on creation (Order embeds SubmitOrder but shadows this field).
+	StrategyInstanceID string `json:"strategyInstanceID,omitempty" db:"-"`
+
+	// Tag is an optional strategy-level label (e.g. "close") — NOT used for strategy instance identification.
 	Tag string `json:"tag,omitempty" db:"-"`
 }
 

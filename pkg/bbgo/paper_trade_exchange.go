@@ -241,6 +241,7 @@ func (m *paperMatchingBook) buildFillLocked(order types.Order, fillPrice fixedpo
 		IsMaker:       true,
 		Fee:           fee,
 		FeeCurrency:   m.Market.QuoteCurrency,
+			StrategyInstanceID: order.StrategyInstanceID,
 		Time:          now,
 	}
 
@@ -561,6 +562,7 @@ func (e *PaperTradeExchange) SubmitOrder(ctx context.Context, submit types.Submi
 		CreationTime:     now,
 		UpdateTime:       now,
 	}
+	order.StrategyInstanceID = submit.StrategyInstanceID
 	if submit.Type == types.OrderTypeMarket {
 		order.Price = price
 	}

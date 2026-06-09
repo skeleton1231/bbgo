@@ -321,6 +321,7 @@ func (b *ActiveOrderBook) clear() {
 func (b *ActiveOrderBook) orderUpdateHandler(order types.Order) {
 	if oldOrder, ok := b.Get(order.OrderID); ok {
 		order.Tag = oldOrder.Tag
+		order.StrategyInstanceID = oldOrder.StrategyInstanceID
 		order.GroupID = oldOrder.GroupID
 	}
 	b.Update(order)
@@ -499,9 +500,10 @@ func (b *ActiveOrderBook) add(order types.Order) {
 		b.logger.Debugf("[ActiveOrderBook] found pending order update: %+v", pendingOrder)
 		if isNewerOrderUpdate(pendingOrder, order) {
 			b.logger.Debugf("[ActiveOrderBook] pending order update is newer: %+v", pendingOrder)
-			if pendingOrder.Tag == "" {
+			if pendingOrder.StrategyInstanceID == "" {
 				pendingOrder.Tag = order.Tag
 				pendingOrder.GroupID = order.GroupID
+				pendingOrder.StrategyInstanceID = order.StrategyInstanceID
 			}
 			order = pendingOrder
 		}

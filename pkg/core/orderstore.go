@@ -115,8 +115,8 @@ func (s *OrderStore) Add(orders ...types.Order) {
 		}
 
 		old, ok := s.orders[o.OrderID]
-		if ok && o.Tag == "" && old.Tag != "" {
-			o.Tag = old.Tag
+		if ok && o.StrategyInstanceID == "" && old.StrategyInstanceID != "" {
+			o.StrategyInstanceID = old.StrategyInstanceID
 		}
 		s.orders[o.OrderID] = o
 	}

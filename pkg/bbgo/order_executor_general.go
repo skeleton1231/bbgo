@@ -3,6 +3,7 @@ package bbgo
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/pkg/errors"
@@ -75,6 +76,12 @@ func NewGeneralOrderExecutor(
 	symbol, strategy, strategyInstanceID string,
 	position *types.Position,
 ) *GeneralOrderExecutor {
+	// If the manager provides an instance ID via env var, use it as the source of truth.
+	// This ensures the ID matches the strategy_instances table in Supabase.
+	if id := os.Getenv("BBGO_STRATEGY_INSTANCE_ID"); id != "" {
+		strategyInstanceID = id
+	}
+
 	// Always update the position fields
 	position.Strategy = strategy
 	position.StrategyInstanceID = strategyInstanceID
@@ -219,12 +226,8 @@ func (e *GeneralOrderExecutor) SetLogger(logger log.FieldLogger) {
 func (e *GeneralOrderExecutor) SubmitOrders(
 	ctx context.Context, submitOrders ...types.SubmitOrder,
 ) (types.OrderSlice, error) {
-	// Tag each submit order with strategyInstanceID so it propagates to created orders
-	// and gets registered in the session's strategy index for REST API lookups.
 	for i := range submitOrders {
-		if submitOrders[i].Tag == "" {
-			submitOrders[i].Tag = e.strategyInstanceID
-		}
+		submitOrders[i].StrategyInstanceID = e.strategyInstanceID
 	}
 
 	formattedOrders, err := e.session.FormatOrders(submitOrders)

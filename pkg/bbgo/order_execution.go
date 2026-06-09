@@ -343,6 +343,7 @@ func BatchPlaceOrder(
 		createdOrder, err := exchange.SubmitOrder(execCtx, order)
 		if orderCallback != nil && createdOrder != nil && createdOrder.OrderID > 0 {
 			createdOrder.Tag = order.Tag
+				createdOrder.StrategyInstanceID = order.StrategyInstanceID
 			orderCallback(*createdOrder)
 		}
 
@@ -442,8 +443,8 @@ batchRetryOrder:
 				}
 
 				if err2 == nil && createdOrder != nil {
-					// if the order is successfully created, then we should copy the order tag
 					createdOrder.Tag = submitOrder.Tag
+					createdOrder.StrategyInstanceID = submitOrder.StrategyInstanceID
 
 					if orderCallback != nil {
 						orderCallback(*createdOrder)
