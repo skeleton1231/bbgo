@@ -84,7 +84,7 @@ func (s *ProfitService) Insert(profit types.Profit) error {
 			:profit, :net_profit, :profit_margin, :net_profit_margin, :trade_id, :price, :quantity,
 			:quote_quantity, :side, :is_buyer, :is_maker, :fee, :fee_currency, :fee_in_usd,
 			:traded_at, :exchange, :is_margin, :is_futures, :is_isolated, :user_id
-		) ON CONFLICT (user_id, trade_id) DO NOTHING`
+		) ON CONFLICT (user_id, exchange, symbol, side, trade_id) DO NOTHING`
 		_, err := s.DB.NamedExecContext(ctx, sql, args)
 		return err
 	}

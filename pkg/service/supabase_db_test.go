@@ -137,7 +137,7 @@ func TestSupabaseInsertViaDirectSQL(t *testing.T) {
 	result, err := db.Exec(`
 		INSERT INTO orders (user_id, order_id, symbol, side, price, quantity, status, order_type, exchange, created_at, updated_at)
 		VALUES ('00000000-0000-0000-0000-000000000000', $1, 'TESTUSDT', 'BUY', '1.00', '1.00', 'NEW', 'LIMIT', 'binance', NOW(), NOW())
-		ON CONFLICT (user_id, order_id) DO UPDATE SET status = EXCLUDED.status, updated_at = NOW()
+		ON CONFLICT (user_id, order_id, exchange) DO UPDATE SET status = EXCLUDED.status, updated_at = NOW()
 	`, testOrderID)
 	if err != nil {
 		t.Fatalf("insert: %v", err)

@@ -621,7 +621,7 @@ func (s *TradeService) Insert(trade types.Trade) error {
 		_, err := s.DB.NamedExec(`
 			INSERT INTO "`+tableName+`" (trade_id, order_id, order_uuid, exchange, price, quantity, quote_quantity, symbol, side, is_buyer, is_maker, traded_at, fee, fee_currency, is_margin, is_futures, is_isolated, strategy, strategy_instance_id, pnl, user_id)
 			VALUES (:trade_id, :order_id, :order_uuid, :exchange, :price, :quantity, :quote_quantity, :symbol, :side, :is_buyer, :is_maker, :traded_at, :fee, :fee_currency, :is_margin, :is_futures, :is_isolated, :strategy, :strategy_instance_id, :pnl, :user_id)
-			ON CONFLICT (user_id, trade_id) DO UPDATE SET order_id=:order_id, order_uuid=:order_uuid, price=:price, quantity=:quantity, quote_quantity=:quote_quantity, symbol=:symbol, side=:side, is_buyer=:is_buyer, is_maker=:is_maker, traded_at=:traded_at, fee=:fee, fee_currency=:fee_currency, is_margin=:is_margin, is_futures=:is_futures, is_isolated=:is_isolated, strategy=:strategy, pnl=:pnl`,
+			ON CONFLICT (user_id, exchange, trade_id) DO UPDATE SET order_id=:order_id, order_uuid=:order_uuid, price=:price, quantity=:quantity, quote_quantity=:quote_quantity, symbol=:symbol, side=:side, is_buyer=:is_buyer, is_maker=:is_maker, traded_at=:traded_at, fee=:fee, fee_currency=:fee_currency, is_margin=:is_margin, is_futures=:is_futures, is_isolated=:is_isolated, strategy=:strategy, pnl=:pnl`,
 			map[string]interface{}{
 				"trade_id":             strconv.FormatUint(trade.ID, 10),
 				"order_id":             strconv.FormatUint(trade.OrderID, 10),

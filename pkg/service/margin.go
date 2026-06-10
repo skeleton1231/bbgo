@@ -91,7 +91,7 @@ func (s *MarginService) InsertLiquidation(liquidation types.MarginLiquidation) e
 	if s.DB.DriverName() == "postgres" {
 		_, err := s.DB.NamedExec(`INSERT INTO "`+tableName+`" (exchange, symbol, side, order_id, price, quantity, average_price, executed_quantity, time_in_force, is_isolated, time, user_id)
 			VALUES (:exchange, :symbol, :side, :order_id, :price, :quantity, :average_price, :executed_quantity, :time_in_force, :is_isolated, :time, :user_id)
-			ON CONFLICT (user_id, order_id) DO NOTHING`,
+			ON CONFLICT (user_id, order_id, exchange) DO NOTHING`,
 			map[string]interface{}{
 				"exchange":          liquidation.Exchange,
 				"symbol":            liquidation.Symbol,

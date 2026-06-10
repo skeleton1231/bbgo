@@ -160,7 +160,7 @@ func (s *FuturesService) Insert(risk types.PositionRisk) (err error) {
 			:mark_price, :break_even_price, :unrealized_pnl, :notional, :initial_margin, :maint_margin,
 			:position_initial_margin, :open_order_initial_margin, :adl, :margin_asset,
 			:position_amount, :updated_at, :user_id
-		) ON CONFLICT (user_id, symbol, position_side) DO UPDATE SET updated_at=:updated_at`,
+		) ON CONFLICT (user_id, exchange, symbol, position_side) DO UPDATE SET updated_at=:updated_at`,
 			map[string]interface{}{
 				"exchange":                  risk.Exchange,
 				"symbol":                    risk.Symbol,
