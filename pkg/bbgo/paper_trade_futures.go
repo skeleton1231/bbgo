@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	log "github.com/sirupsen/logrus"
-
 	"github.com/c9s/bbgo/pkg/fixedpoint"
 	"github.com/c9s/bbgo/pkg/types"
 )
@@ -89,16 +87,16 @@ func (e *PaperTradeExchange) SetLeverage(ctx context.Context, symbol string, lev
 	return nil
 }
 
+// QueryPositionRisk returns position risks for the given symbols.
+// Closed positions (amount=0) are included so that bbgo's FuturesService
+// can update the DB row to reflect the closed state.
 func (e *PaperTradeExchange) QueryPositionRisk(ctx context.Context, symbol ...string) ([]types.PositionRisk, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	if len(symbol) == 0 {
 		var risks []types.PositionRisk
-		for sym, state := range e.futuresStates {
-			if state.PositionAmount.IsZero() {
-				continue
-			}
+		for sym := range e.futuresStates {
 			risk := e.computePositionRiskLocked(sym)
 			risks = append(risks, risk)
 		}
@@ -107,8 +105,7 @@ func (e *PaperTradeExchange) QueryPositionRisk(ctx context.Context, symbol ...st
 
 	var risks []types.PositionRisk
 	for _, sym := range symbol {
-		state, ok := e.futuresStates[sym]
-		if !ok || state.PositionAmount.IsZero() {
+		if _, ok := e.futuresStates[sym]; !ok {
 			continue
 		}
 		risk := e.computePositionRiskLocked(sym)
@@ -202,11 +199,29 @@ func (e *PaperTradeExchange) getOrCreateMarginState(asset string) *paperMarginSt
 }
 
 // computePositionRiskLocked calculates simulated position risk from current state.
+// Returns a risk with position_amount=0 for closed positions, so bbgo's FuturesService
+// can persist the closed state to the database.
 // Must be called with e.mu held.
 func (e *PaperTradeExchange) computePositionRiskLocked(symbol string) types.PositionRisk {
 	state, ok := e.futuresStates[symbol]
-	if !ok || state.PositionAmount.IsZero() {
-		return types.PositionRisk{}
+	if !ok {
+		return types.PositionRisk{
+			Symbol: symbol,
+		}
+	}
+
+	// Closed position: return minimal risk so FuturesService updates DB to amount=0
+	if state.PositionAmount.IsZero() {
+		return types.PositionRisk{
+			Exchange:       e.inner.Name(),
+			Symbol:         symbol,
+			PositionSide:   state.PositionSide,
+			EntryPrice:     state.EntryPrice,
+			Leverage:       fixedpoint.NewFromInt(int64(state.Leverage)),
+			MarginAsset:    state.MarginAsset,
+			PositionAmount: fixedpoint.Zero,
+			UpdateTime:     types.MillisecondTimestamp(time.Now()),
+		}
 	}
 
 	var markPrice fixedpoint.Value
@@ -332,6 +347,8 @@ func (e *PaperTradeExchange) updateFuturesPositionLocked(symbol string, side typ
 		state.PositionSide = types.PositionLong
 	} else if state.PositionAmount.Sign() < 0 {
 		state.PositionSide = types.PositionShort
+	} else {
+		state.PositionSide = types.PositionType("")
 	}
 }
 
@@ -373,98 +390,10 @@ func (e *PaperTradeExchange) StartMarginInterestTimer(ctx context.Context) {
 	}()
 }
 
-// EmitPositionRiskSnapshots computes and returns all non-zero futures position risks.
-func (e *PaperTradeExchange) EmitPositionRiskSnapshots() []types.PositionRisk {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	var risks []types.PositionRisk
-	for symbol, state := range e.futuresStates {
-		if state.PositionAmount.IsZero() {
-			continue
-		}
-		risk := e.computePositionRiskLocked(symbol)
-		risks = append(risks, risk)
-	}
-	return risks
-}
-
-// SyncPositionRisksToDB writes current position risk snapshots to the database.
-func (e *PaperTradeExchange) SyncPositionRisksToDB() error {
-	risks := e.EmitPositionRiskSnapshots()
-	if e.db == nil || len(risks) == 0 {
-		return nil
-	}
-
-	tableName := e.tableName("futures_position_risks")
-	for _, risk := range risks {
-		_, err := e.db.NamedExec(`INSERT INTO "`+tableName+`" (
-			exchange, symbol, position_side, entry_price, leverage, liquidation_price,
-			mark_price, break_even_price, unrealized_pnl, notional, initial_margin, maint_margin,
-			position_initial_margin, open_order_initial_margin, adl, margin_asset,
-			position_amount, updated_at, user_id
-		) VALUES (
-			:exchange, :symbol, :position_side, :entry_price, :leverage, :liquidation_price,
-			:mark_price, :break_even_price, :unrealized_pnl, :notional, :initial_margin, :maint_margin,
-			:position_initial_margin, :open_order_initial_margin, :adl, :margin_asset,
-			:position_amount, :updated_at, :user_id
-		) ON CONFLICT (user_id, exchange, symbol, position_side) DO UPDATE SET
-			entry_price=:entry_price, leverage=:leverage, liquidation_price=:liquidation_price,
-			mark_price=:mark_price, unrealized_pnl=:unrealized_pnl, notional=:notional,
-			initial_margin=:initial_margin, maint_margin=:maint_margin,
-			position_initial_margin=:position_initial_margin,
-			position_amount=:position_amount, updated_at=:updated_at`,
-			map[string]interface{}{
-				"exchange":                  risk.Exchange,
-				"symbol":                    risk.Symbol,
-				"position_side":             risk.PositionSide,
-				"entry_price":               risk.EntryPrice,
-				"leverage":                  risk.Leverage,
-				"liquidation_price":         risk.LiquidationPrice,
-				"mark_price":                risk.MarkPrice,
-				"break_even_price":          risk.BreakEvenPrice,
-				"unrealized_pnl":            risk.UnrealizedPnL,
-				"notional":                  risk.Notional,
-				"initial_margin":            risk.InitialMargin,
-				"maint_margin":              risk.MaintMargin,
-				"position_initial_margin":   risk.PositionInitialMargin,
-				"open_order_initial_margin": risk.OpenOrderInitialMargin,
-				"adl":                       risk.Adl,
-				"margin_asset":              risk.MarginAsset,
-				"position_amount":           risk.PositionAmount,
-				"updated_at":                risk.UpdateTime.Time(),
-				"user_id":                   e.userID,
-			})
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// StartPositionRiskSync starts periodic position risk snapshots to DB.
-func (e *PaperTradeExchange) StartPositionRiskSync(ctx context.Context) {
-	ticker := time.NewTicker(30 * time.Second)
-	go func() {
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if err := e.SyncPositionRisksToDB(); err != nil {
-					log.WithError(err).Warn("paper trade: failed to sync position risks to DB")
-				}
-			}
-		}
-	}()
-}
-
-// StartBackgroundServices starts all background sync tasks based on configured mode.
+// StartBackgroundServices starts background tasks for margin interest accrual.
+// Futures position risk is handled by bbgo's FuturesService via trade callbacks
+// (see environment.go futuresPositionWriterCreator), not by a separate sync loop.
 func (e *PaperTradeExchange) StartBackgroundServices(ctx context.Context) {
-	if e.futuresSettings.IsFutures {
-		e.StartPositionRiskSync(ctx)
-	}
 	if e.marginSettings.IsMargin {
 		e.StartMarginInterestTimer(ctx)
 	}

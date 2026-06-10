@@ -34,7 +34,6 @@ func (s *FuturesService) QueryPositionsAndInsert(
 	ctx context.Context, exchange types.ExchangeRiskService, currentTime time.Time, symbol ...string) error {
 	symbolStr := "*"
 	if len(symbol) > 0 {
-		// sort to ensure the symbolStr is the same for the same set of symbols
 		sort.Slice(symbol, func(i, j int) bool {
 			return symbol[i] < symbol[j]
 		})
@@ -79,12 +78,9 @@ type QueryFuturesPositionRiskOptions struct {
 func (s *FuturesService) Sync(
 	ctx context.Context, service types.ExchangeRiskService, symbol string,
 ) error {
-	// TODO: sync the position history of the given time range
-	// we only sync the lastest position risk record for now.
 	if s.DB == nil {
 		return nil
 	}
-	// Binance does not provide the position risk history API for the time being.
 	risks, err := service.QueryPositionRisk(ctx, symbol)
 	if err != nil {
 		return fmt.Errorf("failed to query position risk: %w", err)
@@ -146,11 +142,19 @@ func (s *FuturesService) Insert(risk types.PositionRisk) (err error) {
 			:mark_price, :break_even_price, :unrealized_pnl, :notional, :initial_margin, :maint_margin,
 			:position_initial_margin, :open_order_initial_margin, :adl, :margin_asset,
 			:position_amount, :updated_at
-		) ON DUPLICATE KEY UPDATE exchange=:exchange, symbol=:symbol, position_side=:position_side, updated_at=:updated_at`
+		) ON DUPLICATE KEY UPDATE
+			entry_price=:entry_price, leverage=:leverage, liquidation_price=:liquidation_price,
+			mark_price=:mark_price, break_even_price=:break_even_price,
+			unrealized_pnl=:unrealized_pnl, notional=:notional,
+			initial_margin=:initial_margin, maint_margin=:maint_margin,
+			position_initial_margin=:position_initial_margin,
+			open_order_initial_margin=:open_order_initial_margin,
+			adl=:adl, margin_asset=:margin_asset,
+			position_amount=:position_amount, updated_at=:updated_at`
 		_, err = s.DB.NamedExec(sql, risk)
 
 	case "postgres":
-		_, err = s.DB.NamedExec(`INSERT INTO "` + tableName + `" (
+		_, err = s.DB.NamedExec(`INSERT INTO "`+tableName+`" (
 			exchange, symbol, position_side, entry_price, leverage, liquidation_price,
 			mark_price, break_even_price, unrealized_pnl, notional, initial_margin, maint_margin,
 			position_initial_margin, open_order_initial_margin, adl, margin_asset,
@@ -160,7 +164,15 @@ func (s *FuturesService) Insert(risk types.PositionRisk) (err error) {
 			:mark_price, :break_even_price, :unrealized_pnl, :notional, :initial_margin, :maint_margin,
 			:position_initial_margin, :open_order_initial_margin, :adl, :margin_asset,
 			:position_amount, :updated_at, :user_id
-		) ON CONFLICT (user_id, exchange, symbol, position_side) DO UPDATE SET updated_at=:updated_at`,
+		) ON CONFLICT (user_id, exchange, symbol, position_side) DO UPDATE SET
+			entry_price=:entry_price, leverage=:leverage, liquidation_price=:liquidation_price,
+			mark_price=:mark_price, break_even_price=:break_even_price,
+			unrealized_pnl=:unrealized_pnl, notional=:notional,
+			initial_margin=:initial_margin, maint_margin=:maint_margin,
+			position_initial_margin=:position_initial_margin,
+			open_order_initial_margin=:open_order_initial_margin,
+			adl=:adl, margin_asset=:margin_asset,
+			position_amount=:position_amount, updated_at=:updated_at`,
 			map[string]interface{}{
 				"exchange":                  risk.Exchange,
 				"symbol":                    risk.Symbol,

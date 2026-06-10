@@ -344,21 +344,6 @@ func TestPaperTradeExchange_QueryAllPositionRisks(t *testing.T) {
 	assert.True(t, symbols["ETHUSDT"])
 }
 
-func TestPaperTradeExchange_QueryPositionRisk_NoZeroPositions(t *testing.T) {
-	e := newTestPaperTradeExchange()
-	e.UseFutures()
-
-	e.mu.Lock()
-	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(1.0))
-	// Close the position
-	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeSell, fixedpoint.NewFromFloat(51000.0), fixedpoint.NewFromFloat(1.0))
-	e.mu.Unlock()
-
-	risks, err := e.QueryPositionRisk(context.Background())
-	require.NoError(t, err)
-	assert.Empty(t, risks, "closed positions should not appear in risk query")
-}
-
 func TestPaperTradeExchange_GetOrCreateFuturesState_Defaults(t *testing.T) {
 	e := newTestPaperTradeExchange()
 	state := e.getOrCreateFuturesState("BTCUSDT")
@@ -393,7 +378,7 @@ func TestPaperTradeExchange_FullRepayClearsInterest(t *testing.T) {
 	assert.True(t, interest.IsZero())
 }
 
-func TestPaperTradeExchange_EmitPositionRiskSnapshots(t *testing.T) {
+func TestPaperTradeExchange_QueryPositionRisk_WithOpenPosition(t *testing.T) {
 	e := newTestPaperTradeExchange()
 	e.UseFutures()
 
@@ -401,15 +386,28 @@ func TestPaperTradeExchange_EmitPositionRiskSnapshots(t *testing.T) {
 	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(1.0))
 	e.mu.Unlock()
 
-	snapshots := e.EmitPositionRiskSnapshots()
-	assert.Len(t, snapshots, 1)
-	assert.Equal(t, "BTCUSDT", snapshots[0].Symbol)
+	risks, err := e.QueryPositionRisk(context.Background())
+	require.NoError(t, err)
+	require.Len(t, risks, 1)
+	assert.Equal(t, "BTCUSDT", risks[0].Symbol)
+	assert.True(t, risks[0].PositionAmount.Compare(fixedpoint.NewFromFloat(1.0)) == 0)
 }
 
-func TestPaperTradeExchange_EmitPositionRiskSnapshots_Empty(t *testing.T) {
+func TestPaperTradeExchange_QueryPositionRisk_ClosedPositionReturnsZero(t *testing.T) {
 	e := newTestPaperTradeExchange()
-	snapshots := e.EmitPositionRiskSnapshots()
-	assert.Empty(t, snapshots)
+	e.UseFutures()
+
+	// Open and close a position
+	e.mu.Lock()
+	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(1.0))
+	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeSell, fixedpoint.NewFromFloat(51000.0), fixedpoint.NewFromFloat(1.0))
+	e.mu.Unlock()
+
+	// Should still return a risk row with position_amount=0 so FuturesService can update DB
+	risks, err := e.QueryPositionRisk(context.Background(), "BTCUSDT")
+	require.NoError(t, err)
+	require.Len(t, risks, 1)
+	assert.True(t, risks[0].PositionAmount.IsZero())
 }
 
 func TestPaperTradeExchange_PartialClosePosition(t *testing.T) {
