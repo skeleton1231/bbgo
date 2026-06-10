@@ -9,7 +9,7 @@ BBGO is a Go-based cryptocurrency trading framework supporting 8 exchanges (Bina
 This repo (`skeleton1231/bbgo`, forked from [c9s/bbgo](https://github.com/c9s/bbgo)) is the upstream for the **SaaS deployment** (`saas/` directory). Key SaaS-specific additions:
 
 - **Supabase direct write** (`DB_DRIVER=supabase`) — orders/trades/positions/profits written to Supabase via REST API; paper mode writes to `paper_*` tables via `SUPABASE_TABLE_PREFIX`
-- **Paper trade engine** (`pkg/bbgo/paper_trade_exchange.go`) — kline-driven matching engine for simulation mode, deadlock-free callback emission
+- **Paper trade engine** (`pkg/bbgo/paper_trade_exchange.go` + `paper_trade_futures.go`) — kline-driven matching engine for simulation mode with full futures/margin support: short selling, leverage-based margin locking, position tracking (weighted average entry, unrealized PnL, liquidation price), margin borrow/repay with hourly interest accrual, deadlock-free callback emission
 - **Strategy instance IDs** (`pkg/instanceid/`) — deterministic instance IDs computed from strategy + symbol + config; propagated to orders/trades for per-instance data isolation
 - **gRPC market data service** — shared `MarketDataService` with 3-layer kline cache (memory → SQLite → API)
 - **Backtest isolation** — per-job config/database to prevent concurrent overwrite
@@ -130,7 +130,7 @@ CLI (cmd/bbgo → pkg/cmd)
 
 | Package | Purpose |
 |---------|---------|
-| `pkg/bbgo/` | Core engine: Environment, Trader, Config, strategy registry, OrderExecutor, ExchangeSession, paper trade engine |
+| `pkg/bbgo/` | Core engine: Environment, Trader, Config, strategy registry, OrderExecutor, ExchangeSession, paper trade engine (spot + futures + margin) |
 | `pkg/types/` | Shared types: Exchange interface, Order, Trade, KLine, Balance, Stream, fixedpoint |
 | `pkg/exchange/` | Exchange adapters (REST + WebSocket); factory in `factory.go`. Each exchange has its own sub-package |
 | `pkg/strategy/` | Built-in strategies (grid2, xmaker, bollmaker, supertrend, etc.) |
@@ -195,6 +195,37 @@ pnpm sb push          # push migrations to remote database
 pnpm sb go-types      # regenerate → manager/supabase_types.go + pkg/supabasetypes/database_types.go
 pnpm sb types         # regenerate → web/src/lib/supabase/types.ts
 ```
+
+### Paper Trade Engine
+
+The paper trade engine (`pkg/bbgo/paper_trade_exchange.go` + `paper_trade_futures.go`) wraps a real exchange for market data and simulates order fills locally via kline-driven matching. It implements the full `types.Exchange` interface plus futures and margin extensions.
+
+**Spot mode** (`PAPER_TRADE=true`): Virtual balances, kline-driven limit/market order matching, balance locking/unlocking, open order restoration from DB.
+
+**Futures mode** (`session.Futures=true`):
+- `PaperTradeExchange` implements `FuturesExchange` and `ExchangeRiskService` interfaces
+- Short selling allowed without holding base currency; margin locked instead of full notional (`notional / leverage`)
+- Position tracking: `paperFuturesState` per symbol — weighted average entry price, position amount (positive=long, negative=short), flip detection (long→short, short→long)
+- `QueryPositionRisk()` computes unrealized PnL, liquidation price, initial/maintenance margin, notional value
+- `SyncPositionRisksToDB()` writes to `paper_futures_position_risks` table every 30s via background goroutine
+- Liquidation price formula: Long = entry × (1 - 1/leverage + maintRate), Short = entry × (1 + 1/leverage - maintRate)
+- Maintenance margin rate: 0.5% (`defaultMaintMarginRate`)
+
+**Margin mode** (`session.Margin=true`):
+- `PaperTradeExchange` implements `MarginExchange` and `MarginBorrowRepayService` interfaces
+- `BorrowMarginAsset()` adds asset to account balance and tracks borrowed amount
+- `RepayMarginAsset()` deducts from account; clears interest when fully repaid
+- Hourly interest accrual at 0.01% rate (`defaultHourlyMarginRate`) via background goroutine
+- `QueryMarginAssetMaxBorrowable()` returns 5× available balance
+
+**Concurrency**: All futures/margin state protected by `PaperTradeExchange.mu`. Lock ordering in matching engine: `paperMatchingBook.mu` → `PaperTradeExchange.mu` (no reverse path). Fill callbacks emitted outside locks to prevent deadlock.
+
+**Session wiring** (`session.go:InitExchange`): When `PAPER_TRADE=true` and session has `Futures` or `Margin` enabled, the corresponding `UseFutures()`/`UseMargin()` methods are called on the paper exchange before it replaces the real exchange. `StartBackgroundServices(ctx)` starts position risk sync and interest accrual goroutines.
+
+**Key files**:
+- `pkg/bbgo/paper_trade_exchange.go` — matching engine, balance management, order submission
+- `pkg/bbgo/paper_trade_futures.go` — futures position tracking, margin borrow/repay, risk computation, DB sync
+- `pkg/bbgo/paper_trade_futures_test.go` — 32 tests covering position lifecycle, liquidation, margin, interest accrual
 
 ## Strategy Development
 

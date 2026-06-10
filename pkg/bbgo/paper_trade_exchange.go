@@ -50,6 +50,7 @@ type paperMatchingBook struct {
 	Symbol  string
 	Market  types.Market
 	Account *types.Account
+	Parent  *PaperTradeExchange // back-reference for futures/margin mode
 
 	mu          sync.Mutex
 	bidOrders   []types.Order
@@ -228,21 +229,30 @@ func (m *paperMatchingBook) buildFillLocked(order types.Order, fillPrice fixedpo
 	quoteQty := order.Quantity.Mul(fillPrice)
 	fee := quoteQty.Mul(feeRate)
 
+	isFutures := false
+	isMargin := false
+	if m.Parent != nil {
+		isFutures = m.Parent.futuresSettings.IsFutures
+		isMargin = m.Parent.marginSettings.IsMargin
+	}
+
 	trade := types.Trade{
-		ID:            nextPaperTradeID(),
-		OrderID:       order.OrderID,
-		Exchange:      order.Exchange,
-		Symbol:        order.Symbol,
-		Side:          order.Side,
-		Price:         fillPrice,
-		Quantity:      order.Quantity,
-		QuoteQuantity: quoteQty,
-		IsBuyer:       order.Side == types.SideTypeBuy,
-		IsMaker:       true,
-		Fee:           fee,
-		FeeCurrency:   m.Market.QuoteCurrency,
-			StrategyInstanceID: order.StrategyInstanceID,
-		Time:          now,
+		ID:                nextPaperTradeID(),
+		OrderID:           order.OrderID,
+		Exchange:          order.Exchange,
+		Symbol:            order.Symbol,
+		Side:              order.Side,
+		Price:             fillPrice,
+		Quantity:          order.Quantity,
+		QuoteQuantity:     quoteQty,
+		IsBuyer:           order.Side == types.SideTypeBuy,
+		IsMaker:           true,
+		Fee:               fee,
+		FeeCurrency:       m.Market.QuoteCurrency,
+		StrategyInstanceID: order.StrategyInstanceID,
+		Time:              now,
+		IsFutures:         isFutures,
+		IsMargin:          isMargin,
 	}
 
 	switch order.Side {
@@ -252,8 +262,26 @@ func (m *paperMatchingBook) buildFillLocked(order types.Order, fillPrice fixedpo
 		m.Account.AddBalance(m.Market.QuoteCurrency, fee.Neg())
 
 	case types.SideTypeSell:
-		m.Account.UseLockedBalance(m.Market.BaseCurrency, order.Quantity)
-		m.Account.AddBalance(m.Market.QuoteCurrency, quoteQty.Sub(fee))
+		if isFutures || isMargin {
+			baseBal, _ := m.Account.Balance(m.Market.BaseCurrency)
+			if baseBal.Locked.Compare(order.Quantity) >= 0 {
+				m.Account.UseLockedBalance(m.Market.BaseCurrency, order.Quantity)
+			} else if baseBal.Locked.Sign() > 0 {
+				m.Account.UseLockedBalance(m.Market.BaseCurrency, baseBal.Locked)
+			}
+			m.Account.AddBalance(m.Market.QuoteCurrency, quoteQty.Sub(fee))
+		} else {
+			m.Account.UseLockedBalance(m.Market.BaseCurrency, order.Quantity)
+			m.Account.AddBalance(m.Market.QuoteCurrency, quoteQty.Sub(fee))
+		}
+	}
+
+	// Update futures position tracking under the exchange mutex.
+	// Lock ordering: m.mu -> e.mu is safe; no reverse path exists.
+	if m.Parent != nil && isFutures {
+		m.Parent.mu.Lock()
+		m.Parent.updateFuturesPositionLocked(order.Symbol, order.Side, fillPrice, order.Quantity)
+		m.Parent.mu.Unlock()
 	}
 
 	filled := order
@@ -322,7 +350,15 @@ type PaperTradeExchange struct {
 	userDataEmitter  types.StandardStreamEmitter
 	db               *sqlx.DB // nil when not in DB mode
 	tablePrefix      string
-	userID          string
+	userID           string
+
+	// Futures state per symbol
+	futuresSettings types.FuturesSettings
+	futuresStates   map[string]*paperFuturesState
+
+	// Margin state per asset
+	marginSettings types.MarginSettings
+	marginStates   map[string]*paperMarginState
 }
 
 func NewPaperTradeExchange(inner types.Exchange, markets types.MarketMap, balances types.BalanceMap) *PaperTradeExchange {
@@ -337,10 +373,12 @@ func NewPaperTradeExchange(inner types.Exchange, markets types.MarketMap, balanc
 	account.UpdateBalances(balances)
 
 	e := &PaperTradeExchange{
-		inner:         inner,
-		markets:       markets,
-		account:       account,
-		matchingBooks: make(map[string]*paperMatchingBook),
+		inner:          inner,
+		markets:        markets,
+		account:        account,
+		matchingBooks:  make(map[string]*paperMatchingBook),
+		futuresStates:  make(map[string]*paperFuturesState),
+		marginStates:   make(map[string]*paperMarginState),
 	}
 
 	for symbol, market := range markets {
@@ -348,6 +386,7 @@ func NewPaperTradeExchange(inner types.Exchange, markets types.MarketMap, balanc
 			Symbol:  symbol,
 			Market:  market,
 			Account: account,
+			Parent:  e,
 		}
 	}
 
@@ -385,6 +424,13 @@ func (e *PaperTradeExchange) SetDB(db *sqlx.DB, tablePrefix string, userID strin
 	e.db = db
 	e.tablePrefix = tablePrefix
 	e.userID = userID
+}
+
+// EmitBalanceUpdateFromAccount emits a balance update using the current account state.
+func (e *PaperTradeExchange) EmitBalanceUpdateFromAccount() {
+	if e.userDataEmitter != nil {
+		e.userDataEmitter.EmitBalanceUpdate(e.account.Balances())
+	}
 }
 
 // RestoreFromDB loads open orders and balances from the database into
@@ -449,6 +495,13 @@ func (e *PaperTradeExchange) RestoreFromDB(ctx context.Context) error {
 
 func (e *PaperTradeExchange) tableName(base string) string {
 	return e.tablePrefix + base
+}
+
+func (e *PaperTradeExchange) effectiveLeverage(symbol string) fixedpoint.Value {
+	if state, ok := e.futuresStates[symbol]; ok && state.Leverage > 0 {
+		return fixedpoint.NewFromInt(int64(state.Leverage))
+	}
+	return fixedpoint.One
 }
 
 func (e *PaperTradeExchange) queryOpenOrders(ctx context.Context, symbol string) ([]types.Order, error) {
@@ -559,6 +612,7 @@ func (e *PaperTradeExchange) matchingBook(symbol string) (*paperMatchingBook, bo
 				Symbol:  symbol,
 				Market:  market,
 				Account: e.account,
+				Parent:  e,
 			}
 			if e.userDataEmitter != nil {
 				m.OnTradeUpdate(e.userDataEmitter.EmitTradeUpdate)
@@ -651,19 +705,40 @@ func (e *PaperTradeExchange) SubmitOrder(ctx context.Context, submit types.Submi
 		UpdateTime:       now,
 	}
 	order.StrategyInstanceID = submit.StrategyInstanceID
+	order.IsFutures = e.futuresSettings.IsFutures
+	order.IsMargin = e.marginSettings.IsMargin
 	if submit.Type == types.OrderTypeMarket {
 		order.Price = price
 	}
 
 	// Lock balance
+	isFutures := e.futuresSettings.IsFutures
+	isMargin := e.marginSettings.IsMargin
+	leverage := e.effectiveLeverage(submit.Symbol)
+
 	switch submit.Side {
 	case types.SideTypeBuy:
-		if err := e.account.LockBalance(market.QuoteCurrency, submit.Quantity.Mul(price)); err != nil {
+		lockAmt := submit.Quantity.Mul(price)
+		if isFutures || isMargin {
+			lockAmt = lockAmt.Div(leverage)
+		}
+		if err := e.account.LockBalance(market.QuoteCurrency, lockAmt); err != nil {
 			return nil, fmt.Errorf("paper trade: %w", err)
 		}
 	case types.SideTypeSell:
-		if err := e.account.LockBalance(market.BaseCurrency, submit.Quantity); err != nil {
-			return nil, fmt.Errorf("paper trade: %w", err)
+		if isFutures || isMargin {
+			// Futures/margin: lock margin (notional / leverage), allow short
+			lockAmt := submit.Quantity.Mul(price).Div(leverage)
+			baseBal, _ := e.account.Balance(market.BaseCurrency)
+			if baseBal.Available.Compare(submit.Quantity) >= 0 {
+				_ = e.account.LockBalance(market.BaseCurrency, submit.Quantity)
+			} else if lockAmt.Sign() > 0 {
+				_ = e.account.LockBalance(market.QuoteCurrency, lockAmt)
+			}
+		} else {
+			if err := e.account.LockBalance(market.BaseCurrency, submit.Quantity); err != nil {
+				return nil, fmt.Errorf("paper trade: %w", err)
+			}
 		}
 	}
 

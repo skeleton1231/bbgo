@@ -712,6 +712,9 @@ func (session *ExchangeSession) Init(ctx context.Context, environ *Environment) 
 		session.MarketDataStream.OnKLineClosed(func(kline types.KLine) {
 			session.paperTradeExchange.OnKLineClosed(kline)
 		})
+
+		// Start background services (futures position risk sync, margin interest accrual)
+		session.paperTradeExchange.StartBackgroundServices(ctx)
 	}
 	session.MarketDataStream.OnMarketTrade(func(trade types.Trade) {
 		session.setLastPrice(trade.Symbol, trade.Price)
@@ -1275,10 +1278,26 @@ func (session *ExchangeSession) InitExchange(name string, ex types.Exchange) err
 		}
 
 		paperEx := NewPaperTradeExchange(ex, markets, balances)
+
+		// Propagate session futures/margin settings to paper trade exchange
+		if session.Futures {
+			paperEx.UseFutures()
+			if session.IsolatedFuturesSymbol != "" {
+				paperEx.UseIsolatedFutures(session.IsolatedFuturesSymbol)
+			}
+		}
+		if session.Margin {
+			paperEx.UseMargin()
+			if session.IsolatedMarginSymbol != "" {
+				paperEx.UseIsolatedMargin(session.IsolatedMarginSymbol)
+			}
+		}
+
 		session.Exchange = paperEx
 		session.paperTradeExchange = paperEx
 
-		log.Infof("paper trade mode: using virtual exchange with balances: %v", balances)
+		log.Infof("paper trade mode: using virtual exchange with balances: %v (futures=%v margin=%v)",
+			balances, paperEx.GetFuturesSettings().IsFutures, paperEx.GetMarginSettings().IsMargin)
 	}
 
 	session.UserDataStream = ex.NewStream()
