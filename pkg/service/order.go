@@ -20,6 +20,7 @@ import (
 type OrderService struct {
 	DB          *sqlx.DB
 	TablePrefix string
+	UserID      string
 }
 
 func (s *OrderService) tableName(base string) string { return s.TablePrefix + base }
@@ -245,9 +246,33 @@ func (s *OrderService) Insert(order types.Order) (err error) {
 
 	case "postgres":
 		_, err = s.DB.NamedExec(`
-			INSERT INTO "`+tableName+`" (exchange, order_id, client_order_id, order_type, status, symbol, price, stop_price, quantity, executed_quantity, side, is_working, time_in_force, created_at, updated_at, is_margin, is_futures, is_isolated, uuid, actual_order_id, strategy_instance_id)
-			VALUES (:exchange, :order_id, :client_order_id, :order_type, :status, :symbol, :price, :stop_price, :quantity, :executed_quantity, :side, :is_working, :time_in_force, :created_at, :updated_at, :is_margin, :is_futures, :is_isolated, :uuid, :actual_order_id, :strategy_instance_id)
-			ON CONFLICT (exchange, order_id) DO UPDATE SET status=:status, executed_quantity=:executed_quantity, is_working=:is_working, updated_at=:updated_at`, order)
+			INSERT INTO "`+tableName+`" (exchange, order_id, client_order_id, order_type, status, symbol, price, stop_price, quantity, executed_quantity, side, is_working, time_in_force, created_at, updated_at, is_margin, is_futures, is_isolated, order_uuid, actual_order_id, strategy_instance_id, user_id)
+			VALUES (:exchange, :order_id, :client_order_id, :order_type, :status, :symbol, :price, :stop_price, :quantity, :executed_quantity, :side, :is_working, :time_in_force, :created_at, :updated_at, :is_margin, :is_futures, :is_isolated, :order_uuid, :actual_order_id, :strategy_instance_id, :user_id)
+			ON CONFLICT (user_id, order_id) DO UPDATE SET status=:status, executed_quantity=:executed_quantity, is_working=:is_working, updated_at=:updated_at`,
+			map[string]interface{}{
+				"exchange":             order.Exchange,
+				"order_id":             strconv.FormatUint(order.OrderID, 10),
+				"client_order_id":      order.ClientOrderID,
+				"order_type":           order.Type,
+				"status":               order.Status,
+				"symbol":               order.Symbol,
+				"price":                order.Price,
+				"stop_price":           order.StopPrice,
+				"quantity":             order.Quantity,
+				"executed_quantity":    order.ExecutedQuantity,
+				"side":                 order.Side,
+				"is_working":           order.IsWorking,
+				"time_in_force":        order.TimeInForce,
+				"created_at":           order.CreationTime,
+				"updated_at":           order.UpdateTime,
+				"is_margin":            order.IsMargin,
+				"is_futures":           order.IsFutures,
+				"is_isolated":          order.IsIsolated,
+				"order_uuid":           order.UUID,
+				"actual_order_id":      order.ActualOrderId,
+				"strategy_instance_id": order.StrategyInstanceID,
+				"user_id":              s.UserID,
+			})
 
 	default: // sqlite3
 		_, err = s.DB.NamedExec(`

@@ -322,6 +322,7 @@ type PaperTradeExchange struct {
 	userDataEmitter  types.StandardStreamEmitter
 	db               *sqlx.DB // nil when not in DB mode
 	tablePrefix      string
+	userID          string
 }
 
 func NewPaperTradeExchange(inner types.Exchange, markets types.MarketMap, balances types.BalanceMap) *PaperTradeExchange {
@@ -380,9 +381,10 @@ func (e *PaperTradeExchange) BindUserData(userDataStream types.StandardStreamEmi
 }
 
 // SetDB enables DB persistence for balance sync.
-func (e *PaperTradeExchange) SetDB(db *sqlx.DB, tablePrefix string) {
+func (e *PaperTradeExchange) SetDB(db *sqlx.DB, tablePrefix string, userID string) {
 	e.db = db
 	e.tablePrefix = tablePrefix
+	e.userID = userID
 }
 
 // RestoreFromDB loads open orders and balances from the database into
@@ -451,10 +453,20 @@ func (e *PaperTradeExchange) tableName(base string) string {
 
 func (e *PaperTradeExchange) queryOpenOrders(ctx context.Context, symbol string) ([]types.Order, error) {
 	tableName := e.tableName("orders")
-	query := "SELECT * FROM " + tableName + " WHERE status IN ('NEW', 'PARTIALLY_FILLED')"
+	var query string
 	var args []interface{}
+	if e.db.DriverName() == "postgres" {
+		query = `SELECT exchange, CAST(order_id AS BIGINT) as order_id, client_order_id, order_type, status, symbol, price, stop_price, quantity, executed_quantity, side, is_working, time_in_force, created_at, updated_at, is_margin, is_futures, is_isolated, order_uuid as uuid, actual_order_id, strategy_instance_id FROM "` + tableName + `" WHERE user_id = $1 AND status IN ('NEW', 'PARTIALLY_FILLED')`
+		args = append(args, e.userID)
+	} else {
+		query = "SELECT * FROM " + tableName + " WHERE status IN ('NEW', 'PARTIALLY_FILLED')"
+	}
 	if symbol != "" {
-		query += " AND symbol = $1"
+		if e.db.DriverName() == "postgres" {
+			query += " AND symbol = $2"
+		} else {
+			query += " AND symbol = ?"
+		}
 		args = append(args, symbol)
 	}
 	rows, err := e.db.QueryxContext(ctx, query, args...)
@@ -476,8 +488,15 @@ func (e *PaperTradeExchange) queryOpenOrders(ctx context.Context, symbol string)
 
 func (e *PaperTradeExchange) queryBalances(ctx context.Context) (types.BalanceMap, error) {
 	tableName := e.tableName("balances")
-	query := "SELECT * FROM " + tableName
-	rows, err := e.db.QueryxContext(ctx, query)
+	var query string
+	var args []interface{}
+	if e.db.DriverName() == "postgres" {
+		query = "SELECT currency, available, locked FROM \"" + tableName + "\" WHERE user_id = $1"
+		args = append(args, e.userID)
+	} else {
+		query = "SELECT currency, available, locked FROM " + tableName
+	}
+	rows, err := e.db.QueryxContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -514,9 +533,9 @@ func (e *PaperTradeExchange) upsertBalances() error {
 		var sql string
 		switch e.db.DriverName() {
 		case "postgres":
-			sql = `INSERT INTO "` + tableName + `" (currency, total, available, locked) VALUES ($1, $2, $3, $4)
-				ON CONFLICT (currency) DO UPDATE SET total = $2, available = $3, locked = $4`
-			_, err := e.db.Exec(sql, currency, b.Total(), b.Available, b.Locked)
+			sql = `INSERT INTO "` + tableName + `" (user_id, currency, total, available, locked) VALUES ($1, $2, $3, $4, $5)
+				ON CONFLICT (user_id, currency) DO UPDATE SET total = $3, available = $4, locked = $5`
+			_, err := e.db.Exec(sql, e.userID, currency, b.Total().String(), b.Available.String(), b.Locked.String())
 			if err != nil {
 				return err
 			}

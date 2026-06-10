@@ -21,6 +21,7 @@ import (
 type RewardService struct {
 	DB          *sqlx.DB
 	TablePrefix string
+	UserID      string
 }
 
 func (s *RewardService) tableName(base string) string { return s.TablePrefix + base }
@@ -142,9 +143,15 @@ func (s *RewardService) QueryUnspent(ctx context.Context, ex types.ExchangeName,
 
 func (s *RewardService) MarkCurrencyAsSpent(ctx context.Context, currency string) error {
 	tableName := s.tableName("rewards")
-	result, err := s.DB.NamedExecContext(ctx, "UPDATE "+tableName+" SET spent = TRUE WHERE currency = :currency AND spent IS FALSE", map[string]interface{}{
+	query := "UPDATE " + tableName + " SET spent = TRUE WHERE currency = :currency AND spent IS FALSE"
+	args := map[string]interface{}{
 		"currency": currency,
-	})
+	}
+	if s.DB.DriverName() == "postgres" {
+		query += " AND user_id = :user_id"
+		args["user_id"] = s.UserID
+	}
+	result, err := s.DB.NamedExecContext(ctx, query, args)
 
 	if err != nil {
 		return err
@@ -156,9 +163,15 @@ func (s *RewardService) MarkCurrencyAsSpent(ctx context.Context, currency string
 
 func (s *RewardService) MarkAsSpent(ctx context.Context, uuid string) error {
 	tableName := s.tableName("rewards")
-	result, err := s.DB.NamedExecContext(ctx, "UPDATE "+tableName+" SET spent = TRUE WHERE uuid = :uuid", map[string]interface{}{
+	query := "UPDATE " + tableName + " SET spent = TRUE WHERE uuid = :uuid"
+	args := map[string]interface{}{
 		"uuid": uuid,
-	})
+	}
+	if s.DB.DriverName() == "postgres" {
+		query += " AND user_id = :user_id"
+		args["user_id"] = s.UserID
+	}
+	result, err := s.DB.NamedExecContext(ctx, query, args)
 	if err != nil {
 		return err
 	}
@@ -190,6 +203,23 @@ func (s *RewardService) scanRows(rows *sqlx.Rows) (rewards []types.Reward, err e
 
 func (s *RewardService) Insert(reward types.Reward) error {
 	tableName := s.tableName("rewards")
+	if s.DB.DriverName() == "postgres" {
+		_, err := s.DB.NamedExec(`INSERT INTO "`+tableName+`" (exchange, uuid, reward_type, currency, quantity, state, note, created_at, user_id)
+			VALUES (:exchange, :uuid, :reward_type, :currency, :quantity, :state, :note, :created_at, :user_id)
+			ON CONFLICT (user_id, uuid) DO NOTHING`,
+			map[string]interface{}{
+				"exchange":    reward.Exchange,
+				"uuid":        reward.UUID,
+				"reward_type": reward.Type,
+				"currency":    reward.Currency,
+				"quantity":    reward.Quantity,
+				"state":       reward.State,
+				"note":        reward.Note,
+				"created_at":  reward.CreatedAt,
+				"user_id":     s.UserID,
+			})
+		return err
+	}
 	_, err := s.DB.NamedExec(`
 		INSERT INTO `+tableName+` (exchange, uuid, reward_type, currency, quantity, state, note, created_at)
 		VALUES (:exchange, :uuid, :reward_type, :currency, :quantity, :state, :note, :created_at)`,

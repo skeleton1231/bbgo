@@ -15,6 +15,7 @@ import (
 type DepositService struct {
 	DB          *sqlx.DB
 	TablePrefix string
+	UserID      string
 }
 
 func (s *DepositService) tableName(base string) string { return s.TablePrefix + base }
@@ -100,6 +101,21 @@ func (s *DepositService) scanRows(rows *sqlx.Rows) (deposits []types.Deposit, er
 
 func (s *DepositService) Insert(deposit types.Deposit) error {
 	tableName := s.tableName("deposits")
+	if s.DB.DriverName() == "postgres" {
+		_, err := s.DB.NamedExec(`INSERT INTO "`+tableName+`" (exchange, asset, address, amount, txn_id, time, user_id)
+			VALUES (:exchange, :asset, :address, :amount, :txn_id, :time, :user_id)
+			ON CONFLICT (user_id, txn_id) DO NOTHING`,
+			map[string]interface{}{
+				"exchange": deposit.Exchange,
+				"asset":    deposit.Asset,
+				"address":  deposit.Address,
+				"amount":   deposit.Amount,
+				"txn_id":   deposit.TransactionID,
+				"time":     deposit.Time,
+				"user_id":  s.UserID,
+			})
+		return err
+	}
 	_, err := s.DB.NamedExec(`INSERT INTO `+tableName+` (exchange, asset, address, amount, txn_id, time)
 			VALUES (:exchange, :asset, :address, :amount, :txn_id, :time)`, deposit)
 	return err

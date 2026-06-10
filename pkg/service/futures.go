@@ -16,6 +16,7 @@ type FuturesService struct {
 	DB                         *sqlx.DB
 	TablePrefix                string
 	PositionRiskUpdateInterval time.Duration
+	UserID                     string
 
 	positionRiskLastUpdateTime map[string]time.Time
 }
@@ -149,18 +150,38 @@ func (s *FuturesService) Insert(risk types.PositionRisk) (err error) {
 		_, err = s.DB.NamedExec(sql, risk)
 
 	case "postgres":
-		sql := `INSERT INTO "` + tableName + `" (
+		_, err = s.DB.NamedExec(`INSERT INTO "` + tableName + `" (
 			exchange, symbol, position_side, entry_price, leverage, liquidation_price,
 			mark_price, break_even_price, unrealized_pnl, notional, initial_margin, maint_margin,
 			position_initial_margin, open_order_initial_margin, adl, margin_asset,
-			position_amount, updated_at
+			position_amount, updated_at, user_id
 		) VALUES (
 			:exchange, :symbol, :position_side, :entry_price, :leverage, :liquidation_price,
 			:mark_price, :break_even_price, :unrealized_pnl, :notional, :initial_margin, :maint_margin,
 			:position_initial_margin, :open_order_initial_margin, :adl, :margin_asset,
-			:position_amount, :updated_at
-		) ON CONFLICT (exchange, symbol, position_side) DO UPDATE SET updated_at=:updated_at`
-		_, err = s.DB.NamedExec(sql, risk)
+			:position_amount, :updated_at, :user_id
+		) ON CONFLICT (user_id, symbol, position_side) DO UPDATE SET updated_at=:updated_at`,
+			map[string]interface{}{
+				"exchange":                  risk.Exchange,
+				"symbol":                    risk.Symbol,
+				"position_side":             risk.PositionSide,
+				"entry_price":               risk.EntryPrice,
+				"leverage":                  risk.Leverage,
+				"liquidation_price":         risk.LiquidationPrice,
+				"mark_price":                risk.MarkPrice,
+				"break_even_price":          risk.BreakEvenPrice,
+				"unrealized_pnl":            risk.UnrealizedPnL,
+				"notional":                  risk.Notional,
+				"initial_margin":            risk.InitialMargin,
+				"maint_margin":              risk.MaintMargin,
+				"position_initial_margin":   risk.PositionInitialMargin,
+				"open_order_initial_margin": risk.OpenOrderInitialMargin,
+				"adl":                       risk.Adl,
+				"margin_asset":              risk.MarginAsset,
+				"position_amount":           risk.PositionAmount,
+				"updated_at":                risk.UpdateTime.Time(),
+				"user_id":                   s.UserID,
+			})
 
 	default: // sqlite3
 		sql := `INSERT INTO ` + tableName + ` (

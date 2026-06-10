@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -16,6 +17,7 @@ import (
 type PositionService struct {
 	DB          *sqlx.DB
 	TablePrefix string
+	UserID      string
 }
 
 func (s *PositionService) tableName(base string) string { return s.TablePrefix + base }
@@ -51,6 +53,7 @@ func (s *PositionService) Insert(
 ) error {
 	tableName := s.tableName("positions")
 	args := map[string]interface{}{
+		"user_id":              s.UserID,
 		"strategy":             position.Strategy,
 		"strategy_instance_id": position.StrategyInstanceID,
 		"symbol":               position.Symbol,
@@ -61,7 +64,7 @@ func (s *PositionService) Insert(
 		"quote":                position.Quote,
 		"profit":               profit,
 		"net_profit":           netProfit,
-		"trade_id":             trade.ID,
+		"trade_id":             strconv.FormatUint(trade.ID, 10),
 		"exchange":             trade.Exchange,
 		"side":                 trade.Side,
 		"traded_at":            trade.Time,
@@ -72,11 +75,11 @@ func (s *PositionService) Insert(
 	case "postgres":
 		sql = `INSERT INTO "` + tableName + `" (
 			strategy, strategy_instance_id, symbol, quote_currency, base_currency, average_cost,
-			base, quote, profit, net_profit, trade_id, exchange, side, traded_at
+			base, quote, profit, net_profit, trade_id, exchange, side, traded_at, user_id
 		) VALUES (
 			:strategy, :strategy_instance_id, :symbol, :quote_currency, :base_currency, :average_cost,
-			:base, :quote, :profit, :net_profit, :trade_id, :exchange, :side, :traded_at
-		) ON CONFLICT DO NOTHING`
+			:base, :quote, :profit, :net_profit, :trade_id, :exchange, :side, :traded_at, :user_id
+		) ON CONFLICT (user_id, trade_id, side, exchange) DO NOTHING`
 	default: // mysql, sqlite3
 		sql = `INSERT OR IGNORE INTO ` + tableName + ` (
 			strategy, strategy_instance_id, symbol, quote_currency, base_currency, average_cost,

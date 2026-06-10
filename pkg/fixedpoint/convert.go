@@ -60,6 +60,7 @@ func (v Value) Value() (driver.Value, error) {
 }
 
 func (v *Value) Scan(src interface{}) error {
+	var err error
 	switch d := src.(type) {
 	case int64:
 		*v = NewFromInt(d)
@@ -70,15 +71,20 @@ func (v *Value) Scan(src interface{}) error {
 		return nil
 
 	case []byte:
-		vv, err := NewFromString(string(d))
+		*v, err = NewFromString(string(d))
 		if err != nil {
 			return err
 		}
-		*v = vv
+		return nil
+
+	case string:
+		*v, err = NewFromString(d)
+		if err != nil {
+			return err
+		}
 		return nil
 
 	default:
-
 	}
 
 	return fmt.Errorf("fixedpoint.Value scan error, type: %T is not supported, value; %+v", src, src)

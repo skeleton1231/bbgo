@@ -300,15 +300,15 @@ func (environ *Environment) configureSupabase() error {
 	prefix := os.Getenv("SUPABASE_TABLE_PREFIX")
 	log.Infof("using supabase postgres backend for user %s (prefix=%q)", userID, prefix)
 
-	environ.OrderService = &service.OrderService{DB: db, TablePrefix: prefix}
-	environ.TradeService = &service.TradeService{DB: db, TablePrefix: prefix}
-	environ.ProfitService = &service.ProfitService{DB: db, TablePrefix: prefix}
-	environ.PositionService = &service.PositionService{DB: db, TablePrefix: prefix}
-	environ.AccountService = &service.AccountService{DB: db, TablePrefix: prefix}
-	environ.RewardService = &service.RewardService{DB: db, TablePrefix: prefix}
-	environ.WithdrawService = &service.WithdrawService{DB: db, TablePrefix: prefix}
-	environ.DepositService = &service.DepositService{DB: db, TablePrefix: prefix}
-	environ.MarginService = &service.MarginService{DB: db, TablePrefix: prefix}
+	environ.OrderService = &service.OrderService{DB: db, TablePrefix: prefix, UserID: userID}
+	environ.TradeService = &service.TradeService{DB: db, TablePrefix: prefix, UserID: userID}
+	environ.ProfitService = &service.ProfitService{DB: db, TablePrefix: prefix, UserID: userID}
+	environ.PositionService = &service.PositionService{DB: db, TablePrefix: prefix, UserID: userID}
+	environ.AccountService = &service.AccountService{DB: db, TablePrefix: prefix, UserID: userID}
+	environ.RewardService = &service.RewardService{DB: db, TablePrefix: prefix, UserID: userID}
+	environ.WithdrawService = &service.WithdrawService{DB: db, TablePrefix: prefix, UserID: userID}
+	environ.DepositService = &service.DepositService{DB: db, TablePrefix: prefix, UserID: userID}
+	environ.MarginService = &service.MarginService{DB: db, TablePrefix: prefix, UserID: userID}
 
 	environ.SyncService = &service.SyncService{
 		TradeService:    environ.TradeService,
@@ -317,7 +317,7 @@ func (environ *Environment) configureSupabase() error {
 		MarginService:   environ.MarginService,
 		WithdrawService: environ.WithdrawService,
 		DepositService:  environ.DepositService,
-		FuturesService:  &service.FuturesService{DB: db, TablePrefix: prefix},
+		FuturesService:  &service.FuturesService{DB: db, TablePrefix: prefix, UserID: userID},
 	}
 
 	return nil

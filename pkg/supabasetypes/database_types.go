@@ -1654,6 +1654,7 @@ type PublicPaperBalancesSelect struct {
   Available string  `json:"available"`
   Currency  string  `json:"currency"`
   Locked    string  `json:"locked"`
+  Total     string  `json:"total"`
   UpdatedAt *string `json:"updated_at,omitempty"`
   UserId    string  `json:"user_id"`
 }
@@ -1662,6 +1663,7 @@ type PublicPaperBalancesInsert struct {
   Available *string `json:"available,omitempty"`
   Currency  string  `json:"currency"`
   Locked    *string `json:"locked,omitempty"`
+  Total     *string `json:"total,omitempty"`
   UpdatedAt *string `json:"updated_at,omitempty"`
   UserId    string  `json:"user_id"`
 }
@@ -1670,6 +1672,7 @@ type PublicPaperBalancesUpdate struct {
   Available *string `json:"available,omitempty"`
   Currency  *string `json:"currency,omitempty"`
   Locked    *string `json:"locked,omitempty"`
+  Total     *string `json:"total,omitempty"`
   UpdatedAt *string `json:"updated_at,omitempty"`
   UserId    *string `json:"user_id,omitempty"`
 }

@@ -71,6 +71,7 @@ type TradingVolumeQueryOptions struct {
 type TradeService struct {
 	DB          *sqlx.DB
 	TablePrefix string
+	UserID      string
 }
 
 func (s *TradeService) tableName(base string) string { return s.TablePrefix + base }
@@ -618,10 +619,32 @@ func (s *TradeService) Insert(trade types.Trade) error {
 
 	case "postgres":
 		_, err := s.DB.NamedExec(`
-			INSERT INTO "`+tableName+`" (id, order_id, order_uuid, exchange, price, quantity, quote_quantity, symbol, side, is_buyer, is_maker, traded_at, fee, fee_currency, is_margin, is_futures, is_isolated, strategy, strategy_instance_id, pnl)
-			VALUES (:id, :order_id, :order_uuid, :exchange, :price, :quantity, :quote_quantity, :symbol, :side, :is_buyer, :is_maker, :traded_at, :fee, :fee_currency, :is_margin, :is_futures, :is_isolated, :strategy, :strategy_instance_id, :pnl)
-			ON CONFLICT (exchange, id) DO UPDATE SET order_id=:order_id, order_uuid=:order_uuid, price=:price, quantity=:quantity, quote_quantity=:quote_quantity, symbol=:symbol, side=:side, is_buyer=:is_buyer, is_maker=:is_maker, traded_at=:traded_at, fee=:fee, fee_currency=:fee_currency, is_margin=:is_margin, is_futures=:is_futures, is_isolated=:is_isolated, strategy=:strategy, pnl=:pnl`,
-			trade)
+			INSERT INTO "`+tableName+`" (trade_id, order_id, order_uuid, exchange, price, quantity, quote_quantity, symbol, side, is_buyer, is_maker, traded_at, fee, fee_currency, is_margin, is_futures, is_isolated, strategy, strategy_instance_id, pnl, user_id)
+			VALUES (:trade_id, :order_id, :order_uuid, :exchange, :price, :quantity, :quote_quantity, :symbol, :side, :is_buyer, :is_maker, :traded_at, :fee, :fee_currency, :is_margin, :is_futures, :is_isolated, :strategy, :strategy_instance_id, :pnl, :user_id)
+			ON CONFLICT (user_id, trade_id) DO UPDATE SET order_id=:order_id, order_uuid=:order_uuid, price=:price, quantity=:quantity, quote_quantity=:quote_quantity, symbol=:symbol, side=:side, is_buyer=:is_buyer, is_maker=:is_maker, traded_at=:traded_at, fee=:fee, fee_currency=:fee_currency, is_margin=:is_margin, is_futures=:is_futures, is_isolated=:is_isolated, strategy=:strategy, pnl=:pnl`,
+			map[string]interface{}{
+				"trade_id":             strconv.FormatUint(trade.ID, 10),
+				"order_id":             strconv.FormatUint(trade.OrderID, 10),
+				"order_uuid":           trade.OrderUUID,
+				"exchange":             trade.Exchange,
+				"price":                trade.Price,
+				"quantity":             trade.Quantity,
+				"quote_quantity":       trade.QuoteQuantity,
+				"symbol":               trade.Symbol,
+				"side":                 trade.Side,
+				"is_buyer":             trade.IsBuyer,
+				"is_maker":             trade.IsMaker,
+				"traded_at":            trade.Time,
+				"fee":                  trade.Fee,
+				"fee_currency":         trade.FeeCurrency,
+				"is_margin":            trade.IsMargin,
+				"is_futures":           trade.IsFutures,
+				"is_isolated":          trade.IsIsolated,
+				"strategy":             trade.StrategyID,
+				"strategy_instance_id": trade.StrategyInstanceID,
+				"pnl":                  trade.PnL,
+				"user_id":              s.UserID,
+			})
 		return err
 
 	default: // sqlite3
@@ -637,8 +660,14 @@ func (s *TradeService) UpdateStrategy(trade types.Trade) error {
 		return nil
 	}
 	tableName := s.tableName("trades")
-	_, err := s.DB.Exec("UPDATE "+tableName+" SET strategy = ?, strategy_instance_id = ? WHERE id = ?", trade.StrategyID.String, trade.StrategyInstanceID, trade.ID)
-	return err
+	switch s.DB.DriverName() {
+	case "postgres":
+		_, err := s.DB.Exec("UPDATE \""+tableName+"\" SET strategy = $1, strategy_instance_id = $2 WHERE trade_id = $3", trade.StrategyID.String, trade.StrategyInstanceID, strconv.FormatUint(trade.ID, 10))
+		return err
+	default:
+		_, err := s.DB.Exec("UPDATE "+tableName+" SET strategy = ?, strategy_instance_id = ? WHERE id = ?", trade.StrategyID.String, trade.StrategyInstanceID, trade.ID)
+		return err
+	}
 }
 
 func (s *TradeService) DeleteAll() error {

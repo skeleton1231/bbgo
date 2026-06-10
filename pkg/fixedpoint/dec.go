@@ -498,6 +498,12 @@ func (v *Value) Scan(src interface{}) error {
 			return err
 		}
 		return nil
+	case string:
+		*v, err = NewFromString(d)
+		if err != nil {
+			return err
+		}
+		return nil
 	default:
 	}
 	return fmt.Errorf("fixedpoint.Value scan error, type %T is not supported, value: %+v", src, src)

@@ -246,11 +246,11 @@ func (e *Exchange) setServerTimeOffset(ctx context.Context) {
 
 	_, err = e.futuresClient.NewSetServerTimeService().Do(ctx)
 	if err != nil {
-		log.WithError(err).Error("can not set server time")
+		log.WithError(err).Warn("can not set futures server time")
 	}
 
 	if err = e.client2.SetTimeOffsetFromServer(ctx); err != nil {
-		log.WithError(err).Error("can not set server time")
+		log.WithError(err).Warn("can not set server time via client2")
 	}
 }
 

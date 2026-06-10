@@ -15,6 +15,7 @@ import (
 type WithdrawService struct {
 	DB          *sqlx.DB
 	TablePrefix string
+	UserID      string
 }
 
 func (s *WithdrawService) tableName(base string) string { return s.TablePrefix + base }
@@ -133,6 +134,23 @@ func (s *WithdrawService) scanRows(rows *sqlx.Rows) (withdraws []types.Withdraw,
 
 func (s *WithdrawService) Insert(withdrawal types.Withdraw) error {
 	tableName := s.tableName("withdraws")
+	if s.DB.DriverName() == "postgres" {
+		_, err := s.DB.NamedExec(`INSERT INTO "`+tableName+`" (exchange, asset, network, address, amount, txn_id, txn_fee, time, user_id)
+			VALUES (:exchange, :asset, :network, :address, :amount, :txn_id, :txn_fee, :time, :user_id)
+			ON CONFLICT (user_id, txn_id) DO NOTHING`,
+			map[string]interface{}{
+				"exchange": withdrawal.Exchange,
+				"asset":    withdrawal.Asset,
+				"network":  withdrawal.Network,
+				"address":  withdrawal.Address,
+				"amount":   withdrawal.Amount,
+				"txn_id":   withdrawal.TransactionID,
+				"txn_fee":  withdrawal.TransactionFee,
+				"time":     withdrawal.ApplyTime,
+				"user_id":  s.UserID,
+			})
+		return err
+	}
 	sql := `INSERT INTO ` + tableName + ` (exchange, asset, network, address, amount, txn_id, txn_fee, time)
 			VALUES (:exchange, :asset, :network, :address, :amount, :txn_id, :txn_fee, :time)`
 	_, err := s.DB.NamedExec(sql, withdrawal)

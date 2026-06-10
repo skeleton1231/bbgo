@@ -15,12 +15,28 @@ import (
 type MarginService struct {
 	DB          *sqlx.DB
 	TablePrefix string
+	UserID      string
 }
 
 func (s *MarginService) tableName(base string) string { return s.TablePrefix + base }
 
 func (s *MarginService) InsertLoan(loan types.MarginLoan) error {
 	tableName := s.tableName("margin_loans")
+	if s.DB.DriverName() == "postgres" {
+		_, err := s.DB.NamedExec(`INSERT INTO "`+tableName+`" (exchange, transaction_id, asset, isolated_symbol, principle, time, user_id)
+			VALUES (:exchange, :transaction_id, :asset, :isolated_symbol, :principle, :time, :user_id)
+			ON CONFLICT (user_id, transaction_id) DO NOTHING`,
+			map[string]interface{}{
+				"exchange":        loan.Exchange,
+				"transaction_id":  loan.TransactionID,
+				"asset":           loan.Asset,
+				"isolated_symbol": loan.IsolatedSymbol,
+				"principle":       loan.Principle,
+				"time":            loan.Time,
+				"user_id":         s.UserID,
+			})
+		return err
+	}
 	_, err := s.DB.NamedExec(`INSERT INTO `+tableName+` (exchange, transaction_id, asset, isolated_symbol, principle, time)
 			VALUES (:exchange, :transaction_id, :asset, :isolated_symbol, :principle, :time)`, loan)
 	return err
@@ -28,6 +44,21 @@ func (s *MarginService) InsertLoan(loan types.MarginLoan) error {
 
 func (s *MarginService) InsertRepay(repay types.MarginRepay) error {
 	tableName := s.tableName("margin_repays")
+	if s.DB.DriverName() == "postgres" {
+		_, err := s.DB.NamedExec(`INSERT INTO "`+tableName+`" (exchange, transaction_id, asset, isolated_symbol, principle, time, user_id)
+			VALUES (:exchange, :transaction_id, :asset, :isolated_symbol, :principle, :time, :user_id)
+			ON CONFLICT (user_id, transaction_id) DO NOTHING`,
+			map[string]interface{}{
+				"exchange":        repay.Exchange,
+				"transaction_id":  repay.TransactionID,
+				"asset":           repay.Asset,
+				"isolated_symbol": repay.IsolatedSymbol,
+				"principle":       repay.Principle,
+				"time":            repay.Time,
+				"user_id":         s.UserID,
+			})
+		return err
+	}
 	_, err := s.DB.NamedExec(`INSERT INTO `+tableName+` (exchange, transaction_id, asset, isolated_symbol, principle, time)
 			VALUES (:exchange, :transaction_id, :asset, :isolated_symbol, :principle, :time)`, repay)
 	return err
@@ -35,6 +66,21 @@ func (s *MarginService) InsertRepay(repay types.MarginRepay) error {
 
 func (s *MarginService) InsertInterest(interest types.MarginInterest) error {
 	tableName := s.tableName("margin_interests")
+	if s.DB.DriverName() == "postgres" {
+		_, err := s.DB.NamedExec(`INSERT INTO "`+tableName+`" (exchange, asset, isolated_symbol, principle, interest, interest_rate, time, user_id)
+			VALUES (:exchange, :asset, :isolated_symbol, :principle, :interest, :interest_rate, :time, :user_id)`,
+			map[string]interface{}{
+				"exchange":        interest.Exchange,
+				"asset":           interest.Asset,
+				"isolated_symbol": interest.IsolatedSymbol,
+				"principle":       interest.Principle,
+				"interest":        interest.Interest,
+				"interest_rate":   interest.InterestRate,
+				"time":            interest.Time,
+				"user_id":         s.UserID,
+			})
+		return err
+	}
 	_, err := s.DB.NamedExec(`INSERT INTO `+tableName+` (exchange, asset, isolated_symbol, principle, interest, interest_rate, time)
 			VALUES (:exchange, :asset, :isolated_symbol, :principle, :interest, :interest_rate, :time)`, interest)
 	return err
@@ -42,6 +88,26 @@ func (s *MarginService) InsertInterest(interest types.MarginInterest) error {
 
 func (s *MarginService) InsertLiquidation(liquidation types.MarginLiquidation) error {
 	tableName := s.tableName("margin_liquidations")
+	if s.DB.DriverName() == "postgres" {
+		_, err := s.DB.NamedExec(`INSERT INTO "`+tableName+`" (exchange, symbol, side, order_id, price, quantity, average_price, executed_quantity, time_in_force, is_isolated, time, user_id)
+			VALUES (:exchange, :symbol, :side, :order_id, :price, :quantity, :average_price, :executed_quantity, :time_in_force, :is_isolated, :time, :user_id)
+			ON CONFLICT (user_id, order_id) DO NOTHING`,
+			map[string]interface{}{
+				"exchange":          liquidation.Exchange,
+				"symbol":            liquidation.Symbol,
+				"side":              liquidation.Side,
+				"order_id":          liquidation.OrderID,
+				"price":             liquidation.Price,
+				"quantity":          liquidation.Quantity,
+				"average_price":     liquidation.AveragePrice,
+				"executed_quantity": liquidation.ExecutedQuantity,
+				"time_in_force":     liquidation.TimeInForce,
+				"is_isolated":       liquidation.IsIsolated,
+				"time":              liquidation.UpdatedTime,
+				"user_id":           s.UserID,
+			})
+		return err
+	}
 	_, err := s.DB.NamedExec(`INSERT INTO `+tableName+` (exchange, symbol, side, order_id, price, quantity, average_price, executed_quantity, time_in_force, is_isolated, time)
 			VALUES (:exchange, :symbol, :side, :order_id, :price, :quantity, :average_price, :executed_quantity, :time_in_force, :is_isolated, :time)`, liquidation)
 	return err

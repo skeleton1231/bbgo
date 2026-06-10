@@ -14,6 +14,7 @@ import (
 type ProfitService struct {
 	DB          *sqlx.DB
 	TablePrefix string
+	UserID      string
 }
 
 func (s *ProfitService) tableName(base string) string { return s.TablePrefix + base }
@@ -43,6 +44,51 @@ func (s *ProfitService) Insert(profit types.Profit) error {
 	defer cancel()
 
 	tableName := s.tableName("profits")
+
+	if s.DB.DriverName() == "postgres" {
+		args := map[string]interface{}{
+			"strategy":             profit.Strategy,
+			"strategy_instance_id": profit.StrategyInstanceID,
+			"symbol":               profit.Symbol,
+			"quote_currency":       profit.QuoteCurrency,
+			"base_currency":        profit.BaseCurrency,
+			"average_cost":         profit.AverageCost,
+			"profit":               profit.Profit,
+			"net_profit":           profit.NetProfit,
+			"profit_margin":        profit.ProfitMargin,
+			"net_profit_margin":    profit.NetProfitMargin,
+			"trade_id":             profit.TradeID,
+			"price":                profit.Price,
+			"quantity":             profit.Quantity,
+			"quote_quantity":       profit.QuoteQuantity,
+			"side":                 profit.Side,
+			"is_buyer":             profit.IsBuyer,
+			"is_maker":             profit.IsMaker,
+			"fee":                  profit.Fee,
+			"fee_currency":         profit.FeeCurrency,
+			"fee_in_usd":           profit.FeeInUSD,
+			"traded_at":            profit.TradedAt,
+			"exchange":             profit.Exchange,
+			"is_margin":            profit.IsMargin,
+			"is_futures":           profit.IsFutures,
+			"is_isolated":          profit.IsIsolated,
+			"user_id":              s.UserID,
+		}
+		sql := `INSERT INTO "` + tableName + `" (
+			strategy, strategy_instance_id, symbol, quote_currency, base_currency, average_cost,
+			profit, net_profit, profit_margin, net_profit_margin, trade_id, price, quantity,
+			quote_quantity, side, is_buyer, is_maker, fee, fee_currency, fee_in_usd,
+			traded_at, exchange, is_margin, is_futures, is_isolated, user_id
+		) VALUES (
+			:strategy, :strategy_instance_id, :symbol, :quote_currency, :base_currency, :average_cost,
+			:profit, :net_profit, :profit_margin, :net_profit_margin, :trade_id, :price, :quantity,
+			:quote_quantity, :side, :is_buyer, :is_maker, :fee, :fee_currency, :fee_in_usd,
+			:traded_at, :exchange, :is_margin, :is_futures, :is_isolated, :user_id
+		) ON CONFLICT (user_id, trade_id) DO NOTHING`
+		_, err := s.DB.NamedExecContext(ctx, sql, args)
+		return err
+	}
+
 	sql := `
 		INSERT INTO ` + tableName + ` (
 			strategy, strategy_instance_id, symbol, quote_currency, base_currency, average_cost,

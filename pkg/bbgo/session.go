@@ -700,7 +700,7 @@ func (session *ExchangeSession) Init(ctx context.Context, environ *Environment) 
 	// Must happen before klines reach the matching engine to avoid duplicate fills.
 	if session.paperTradeExchange != nil {
 		if environ.OrderService != nil && environ.OrderService.DB != nil {
-				session.paperTradeExchange.SetDB(environ.OrderService.DB, environ.OrderService.TablePrefix)
+				session.paperTradeExchange.SetDB(environ.OrderService.DB, environ.OrderService.TablePrefix, environ.OrderService.UserID)
 				if err := session.paperTradeExchange.RestoreFromDB(ctx); err != nil {
 				logger.WithError(err).Warn("failed to restore paper trade state from DB")
 			}
