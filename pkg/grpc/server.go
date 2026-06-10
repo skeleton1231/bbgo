@@ -206,6 +206,25 @@ type MarketDataService struct {
 	pb.UnimplementedMarketDataServiceServer
 }
 
+// resolveSession finds a session by exact name first, then falls back to
+// matching by exchange name. This allows callers to request a specific
+// session (e.g., "binance_futures") or just an exchange (e.g., "binance").
+func (s *MarketDataService) resolveSession(name string) (*bbgo.ExchangeSession, bool) {
+	if session, ok := s.Environ.Session(name); ok {
+		return session, true
+	}
+	exchangeName, err := types.ValidExchangeName(name)
+	if err != nil {
+		return nil, false
+	}
+	for _, session := range s.Environ.Sessions() {
+		if session.ExchangeName == exchangeName {
+			return session, true
+		}
+	}
+	return nil, false
+}
+
 func (s *MarketDataService) getOrCreateBroadcaster(session *bbgo.ExchangeSession) *SharedBroadcaster {
 	s.bcMu.Lock()
 	defer s.bcMu.Unlock()
@@ -225,7 +244,7 @@ func (s *MarketDataService) Subscribe(request *pb.SubscribeRequest, server pb.Ma
 	for _, sub := range request.Subscriptions {
 		session, ok := s.Environ.Session(sub.Exchange)
 		if !ok {
-			return fmt.Errorf("exchange %s not found", sub.Exchange)
+			return fmt.Errorf("session %s not found", sub.Exchange)
 		}
 		ss, err := toSubscriptions(sub)
 		if err != nil {
@@ -275,9 +294,9 @@ func (s *MarketDataService) Subscribe(request *pb.SubscribeRequest, server pb.Ma
 }
 
 func (s *MarketDataService) QueryKLines(ctx context.Context, request *pb.QueryKLinesRequest) (*pb.QueryKLinesResponse, error) {
-	exchangeName, err := types.ValidExchangeName(request.Exchange)
-	if err != nil {
-		return nil, err
+	session, ok := s.resolveSession(request.Exchange)
+	if !ok {
+		return nil, fmt.Errorf("session/exchange %s not found", request.Exchange)
 	}
 
 	cacheKey := klineCacheKey{
@@ -309,13 +328,8 @@ func (s *MarketDataService) QueryKLines(ctx context.Context, request *pb.QueryKL
 			log.WithError(err).Debug("kline cache sqlite miss")
 		} else if len(sqliteKlines) > 0 {
 			var pbKlines []*pb.KLine
-			for _, session := range s.Environ.Sessions() {
-				if session.ExchangeName == exchangeName {
-					for _, k := range sqliteKlines {
-						pbKlines = append(pbKlines, transKLine(session, k))
-					}
-					break
-				}
+			for _, k := range sqliteKlines {
+				pbKlines = append(pbKlines, transKLine(session, k))
 			}
 			s.cache.setMemory(cacheKey, pbKlines, klineTTL(request.Interval))
 			return &pb.QueryKLinesResponse{Klines: pbKlines}, nil
@@ -323,114 +337,96 @@ func (s *MarketDataService) QueryKLines(ctx context.Context, request *pb.QueryKL
 	}
 
 	// L3: exchange API
-	for _, session := range s.Environ.Sessions() {
-		if session.ExchangeName == exchangeName {
-			response := &pb.QueryKLinesResponse{}
+	response := &pb.QueryKLinesResponse{}
 
-			endTime := time.Now()
-			if request.EndTime != 0 {
-				endTime = time.Unix(request.EndTime, 0)
-			}
-
-			options := types.KLineQueryOptions{
-				Limit: int(request.Limit),
-			}
-			options.EndTime = &endTime
-
-			if request.StartTime != 0 {
-				st := time.Unix(request.StartTime, 0)
-				options.StartTime = &st
-			}
-
-			klines, err := session.Exchange.QueryKLines(ctx, request.Symbol, types.Interval(request.Interval), options)
-			if err != nil {
-				return nil, err
-			}
-
-			for _, kline := range klines {
-				response.Klines = append(response.Klines, transKLine(session, kline))
-			}
-
-			// Write back to L1 + L2
-			if s.cache != nil {
-				s.cache.setMemory(cacheKey, response.Klines, klineTTL(request.Interval))
-				writeCtx, writeCancel := context.WithTimeout(context.Background(), 30*time.Second)
-				go func() {
-					defer writeCancel()
-					defer func() {
-						if r := recover(); r != nil {
-							log.WithField("recover", r).Warn("kline cache: recovered from panic in sqlite write-back")
-						}
-					}()
-					s.cache.writeSQLite(writeCtx, request.Exchange, klines)
-				}()
-			}
-
-			return response, nil
-		}
+	endTime := time.Now()
+	if request.EndTime != 0 {
+		endTime = time.Unix(request.EndTime, 0)
 	}
 
-	return nil, fmt.Errorf("exchange %s not found", request.Exchange)
+	options := types.KLineQueryOptions{
+		Limit: int(request.Limit),
+	}
+	options.EndTime = &endTime
+
+	if request.StartTime != 0 {
+		st := time.Unix(request.StartTime, 0)
+		options.StartTime = &st
+	}
+
+	klines, err := session.Exchange.QueryKLines(ctx, request.Symbol, types.Interval(request.Interval), options)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, kline := range klines {
+		response.Klines = append(response.Klines, transKLine(session, kline))
+	}
+
+	// Write back to L1 + L2
+	if s.cache != nil {
+		s.cache.setMemory(cacheKey, response.Klines, klineTTL(request.Interval))
+		writeCtx, writeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		go func() {
+			defer writeCancel()
+			defer func() {
+				if r := recover(); r != nil {
+					log.WithField("recover", r).Warn("kline cache: recovered from panic in sqlite write-back")
+				}
+			}()
+			s.cache.writeSQLite(writeCtx, request.Exchange, klines)
+		}()
+	}
+
+	return response, nil
 }
 
 func (s *MarketDataService) QueryTicker(ctx context.Context, request *pb.QueryTickerRequest) (*pb.QueryTickerResponse, error) {
-	exchangeName, err := types.ValidExchangeName(request.Exchange)
+	session, ok := s.resolveSession(request.Exchange)
+	if !ok {
+		return nil, fmt.Errorf("session/exchange %s not found", request.Exchange)
+	}
+
+	ticker, err := session.Exchange.QueryTicker(ctx, request.Symbol)
 	if err != nil {
 		return nil, err
 	}
-
-	for _, session := range s.Environ.Sessions() {
-		if session.ExchangeName == exchangeName {
-			ticker, err := session.Exchange.QueryTicker(ctx, request.Symbol)
-			if err != nil {
-				return nil, err
-			}
-			return &pb.QueryTickerResponse{
-				Ticker: &pb.Ticker{
-					Exchange: request.Exchange,
-					Symbol:   request.Symbol,
-					Open:     ticker.Open.Float64(),
-					High:     ticker.High.Float64(),
-					Low:      ticker.Low.Float64(),
-					Close:    ticker.Last.Float64(),
-					Volume:   ticker.Volume.Float64(),
-				},
-			}, nil
-		}
-	}
-
-	return nil, fmt.Errorf("exchange %s not found", request.Exchange)
+	return &pb.QueryTickerResponse{
+		Ticker: &pb.Ticker{
+			Exchange: request.Exchange,
+			Symbol:   request.Symbol,
+			Open:     ticker.Open.Float64(),
+			High:     ticker.High.Float64(),
+			Low:      ticker.Low.Float64(),
+			Close:    ticker.Last.Float64(),
+			Volume:   ticker.Volume.Float64(),
+		},
+	}, nil
 }
 
 func (s *MarketDataService) QueryTickers(ctx context.Context, request *pb.QueryTickersRequest) (*pb.QueryTickersResponse, error) {
-	exchangeName, err := types.ValidExchangeName(request.Exchange)
+	session, ok := s.resolveSession(request.Exchange)
+	if !ok {
+		return nil, fmt.Errorf("session/exchange %s not found", request.Exchange)
+	}
+
+	tickers, err := session.Exchange.QueryTickers(ctx, request.Symbols...)
 	if err != nil {
 		return nil, err
 	}
-
-	for _, session := range s.Environ.Sessions() {
-		if session.ExchangeName == exchangeName {
-			tickers, err := session.Exchange.QueryTickers(ctx, request.Symbols...)
-			if err != nil {
-				return nil, err
-			}
-			resp := &pb.QueryTickersResponse{}
-			for symbol, t := range tickers {
-				resp.Tickers = append(resp.Tickers, &pb.Ticker{
-					Exchange: request.Exchange,
-					Symbol:   symbol,
-					Open:     t.Open.Float64(),
-					High:     t.High.Float64(),
-					Low:      t.Low.Float64(),
-					Close:    t.Last.Float64(),
-					Volume:   t.Volume.Float64(),
-				})
-			}
-			return resp, nil
-		}
+	resp := &pb.QueryTickersResponse{}
+	for symbol, t := range tickers {
+		resp.Tickers = append(resp.Tickers, &pb.Ticker{
+			Exchange: request.Exchange,
+			Symbol:   symbol,
+			Open:     t.Open.Float64(),
+			High:     t.High.Float64(),
+			Low:      t.Low.Float64(),
+			Close:    t.Last.Float64(),
+			Volume:   t.Volume.Float64(),
+		})
 	}
-
-	return nil, fmt.Errorf("exchange %s not found", request.Exchange)
+	return resp, nil
 }
 
 func registerMarketDataServiceCombined(s *grpc.Server, srv *MarketDataService) {
