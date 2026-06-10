@@ -399,7 +399,8 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 	// event trigger order: s.Interval => minInterval
 	store, ok := session.SerialMarketDataStore(ctx, s.Symbol, []types.Interval{s.Interval, s.MinInterval}, !bbgo.IsBackTesting)
 	if !ok {
-		panic("cannot get " + s.MinInterval + " history")
+		log.Errorf("cannot get %s history, waiting for kline data...", s.MinInterval)
+		return nil
 	}
 	if err := s.initIndicators(store); err != nil {
 		log.WithError(err).Errorf("initIndicator failed")

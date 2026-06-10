@@ -111,12 +111,18 @@ func (s *PerTrade) Bind(session *bbgo.ExchangeSession, orderExecutor *bbgo.Gener
 		if orderFlowSizeMinMax.Length() > 100 && orderFlowNumberMinMax.Length() > 100 {
 			bid, ask, _ := s.StreamBook.BestBidAndAsk()
 			if outlier(orderFlowSizeMinMax.Tail(100), threshold) > 0 && outlier(orderFlowNumberMinMax.Tail(100), threshold) > 0 {
+				if bid.Price.IsZero() {
+					return
+				}
 				_ = s.orderExecutor.GracefulCancel(ctx)
 				log.Infof("long!!")
 				// _ = s.placeTrade(ctx, types.SideTypeBuy, s.Quantity, symbol)
 				_ = s.placeOrder(ctx, types.SideTypeBuy, s.Quantity, bid.Price, symbol)
 				// _ = s.placeOrder(ctx, types.SideTypeSell, s.Quantity, ask.Price.Mul(fixedpoint.NewFromFloat(1.0005)), symbol)
 			} else if outlier(orderFlowSizeMinMax.Tail(100), threshold) < 0 && outlier(orderFlowNumberMinMax.Tail(100), threshold) < 0 {
+				if ask.Price.IsZero() {
+					return
+				}
 				_ = s.orderExecutor.GracefulCancel(ctx)
 				log.Infof("short!!")
 				// _ = s.placeTrade(ctx, types.SideTypeSell, s.Quantity, symbol)

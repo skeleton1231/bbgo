@@ -801,6 +801,9 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 			}
 
 			midPrice = ticker.Buy.Add(ticker.Sell).Div(two)
+			if midPrice.IsZero() {
+				return
+			}
 			log.Infof("using ticker price: bid %v / ask %v, mid price %v", ticker.Buy, ticker.Sell, midPrice)
 		} else {
 			midPrice = closePrice

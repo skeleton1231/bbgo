@@ -30,7 +30,7 @@ type Strategy struct {
 	Market      types.Market
 
 	Symbol     string           `json:"symbol"`
-	Interval   types.Interval   `json:"interval"`
+	Interval   types.Interval   `json:"interval" mapstructure:"interval"`
 	Quantity   fixedpoint.Value `json:"quantity"`
 	HalfSpread fixedpoint.Value `json:"halfSpread"`
 	OrderType  types.OrderType  `json:"orderType"`

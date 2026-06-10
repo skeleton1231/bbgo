@@ -99,11 +99,14 @@ func pbTickerToTypes(t *pb.Ticker) *types.Ticker {
 	if t == nil {
 		return nil
 	}
+	last := fixedpoint.NewFromFloat(t.Close)
 	return &types.Ticker{
 		Open:   fixedpoint.NewFromFloat(t.Open),
 		High:   fixedpoint.NewFromFloat(t.High),
 		Low:    fixedpoint.NewFromFloat(t.Low),
-		Last:   fixedpoint.NewFromFloat(t.Close),
+		Last:   last,
+		Buy:    last,
+		Sell:   last,
 		Volume: fixedpoint.NewFromFloat(t.Volume),
 	}
 }

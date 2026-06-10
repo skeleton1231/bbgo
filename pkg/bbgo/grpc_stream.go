@@ -263,6 +263,27 @@ func (s *GRPCStream) dispatch(data *pb.MarketData) {
 			return
 		}
 		k := pb.PbKLineToTypes(data.Kline)
+			if k.Interval == "" {
+				ms := k.EndTime.Time().Sub(k.StartTime.Time()).Milliseconds()
+				switch {
+				case ms >= 57000 && ms <= 63000:
+					k.Interval = types.Interval1m
+				case ms >= 177000 && ms <= 183000:
+					k.Interval = types.Interval3m
+				case ms >= 297000 && ms <= 303000:
+					k.Interval = types.Interval5m
+				case ms >= 897000 && ms <= 903000:
+					k.Interval = types.Interval15m
+				case ms >= 1797000 && ms <= 1803000:
+					k.Interval = types.Interval30m
+				case ms >= 3570000 && ms <= 3630000:
+					k.Interval = types.Interval1h
+				case ms >= 14370000 && ms <= 14430000:
+					k.Interval = types.Interval4h
+				case ms >= 86340000 && ms <= 86460000:
+					k.Interval = types.Interval1d
+				}
+			}
 		s.EmitKLine(k)
 		if k.Closed {
 			s.EmitKLineClosed(k)
