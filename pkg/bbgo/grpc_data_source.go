@@ -46,7 +46,7 @@ func (s *SharedServiceSource) LoadMarkets(ctx context.Context, session *Exchange
 }
 
 func (s *SharedServiceSource) NewMarketDataStream(session *ExchangeSession) types.Stream {
-	return NewGRPCStream(s.conn, string(session.ExchangeName))
+	return NewGRPCStream(s.conn, string(session.ExchangeName), s.grpcAddr)
 }
 
 func (s *SharedServiceSource) loadMarketsFromSharedFile(exchangeName types.ExchangeName) (types.MarketMap, error) {

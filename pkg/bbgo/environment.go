@@ -222,6 +222,8 @@ func (environ *Environment) ConfigureDatabase(ctx context.Context, config *Confi
 	} else if val, ok := os.LookupEnv("MYSQL_URL"); ok && (dbDriver == "" || dbDriver == "mysql") {
 		dbDSN = val
 		dbDriver = "mysql"
+	} else if val, ok := os.LookupEnv("SUPABASE_DB_URL"); ok && (dbDriver == "supabase" || dbDriver == "postgresql") {
+		dbDSN = val
 	}
 
 	// database is optional
@@ -235,7 +237,7 @@ func (environ *Environment) ConfigureDatabase(ctx context.Context, config *Confi
 func (environ *Environment) ConfigureDatabaseDriver(
 	ctx context.Context, driver string, dsn string, extraPkgNames ...string,
 ) error {
-	if driver == "supabase" {
+	if driver == "supabase" || driver == "postgresql" {
 		return environ.configureSupabase()
 	}
 

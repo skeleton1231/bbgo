@@ -5,9 +5,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
+	"fmt"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/c9s/bbgo/pkg/pb"
 	"github.com/c9s/bbgo/pkg/types"
@@ -19,13 +20,16 @@ import (
 // they would with StandardStream — they never know the difference.
 type GRPCStream struct {
 	exchangeName string
+	grpcAddr     string
 	conn         *grpc.ClientConn
 
 	mu            sync.Mutex
 	subscriptions []types.Subscription
 
-	ctx    context.Context
-	cancel context.CancelFunc
+	rootCtx context.Context
+	rootCancel context.CancelFunc
+	streamCtx  context.Context
+	streamCancel context.CancelFunc
 
 	// callbacks — mirrors StandardStream callback slices
 	startCallbacks           []func()
@@ -44,10 +48,14 @@ type GRPCStream struct {
 	balanceUpdateCallbacks   []func(balances types.BalanceMap)
 }
 
-func NewGRPCStream(conn *grpc.ClientConn, exchangeName string) *GRPCStream {
+func NewGRPCStream(conn *grpc.ClientConn, exchangeName string, grpcAddr string) *GRPCStream {
+	rootCtx, rootCancel := context.WithCancel(context.Background())
 	return &GRPCStream{
-		conn:         conn,
+		conn:       conn,
 		exchangeName: exchangeName,
+		grpcAddr:   grpcAddr,
+		rootCtx:    rootCtx,
+		rootCancel: rootCancel,
 	}
 }
 
@@ -78,7 +86,7 @@ func (s *GRPCStream) Resubscribe(fn func(oldSubs []types.Subscription) (newSubs 
 	}
 	s.mu.Lock()
 	s.subscriptions = newSubs
-	cancelFn := s.cancel
+	cancelFn := s.streamCancel
 	s.mu.Unlock()
 	if cancelFn != nil {
 		cancelFn()
@@ -100,16 +108,18 @@ func (s *GRPCStream) Connect(ctx context.Context) error {
 		pbSubs = append(pbSubs, typesSubToPB(sub, s.exchangeName))
 	}
 
-	streamCtx, cancel := context.WithCancel(ctx)
-	s.ctx = streamCtx
-	s.cancel = cancel
+	streamCtx, streamCancel := context.WithCancel(s.rootCtx)
+	s.mu.Lock()
+	s.streamCtx = streamCtx
+	s.streamCancel = streamCancel
+	s.mu.Unlock()
 
 	client := pb.NewMarketDataServiceClient(s.conn)
 	req := &pb.SubscribeRequest{Subscriptions: pbSubs}
 	stream, err := client.Subscribe(streamCtx, req)
 	if err != nil {
-		cancel()
-		return errors.Wrap(err, "gRPC subscribe")
+		streamCancel()
+		return fmt.Errorf("gRPC subscribe: %w", err)
 	}
 
 	s.EmitConnect()
@@ -119,16 +129,16 @@ func (s *GRPCStream) Connect(ctx context.Context) error {
 }
 
 func (s *GRPCStream) Close() error {
-	if s.cancel != nil {
-		s.cancel()
-	}
+	s.rootCancel()
 	return nil
 }
 
 func (s *GRPCStream) Reconnect() {
-	if s.cancel != nil {
-		s.cancel()
+	s.mu.Lock()
+	if s.streamCancel != nil {
+		s.streamCancel()
 	}
+	s.mu.Unlock()
 }
 
 // --- receive loop ---
@@ -149,14 +159,17 @@ func (s *GRPCStream) receiveLoop(stream pb.MarketDataService_SubscribeClient) {
 
 func (s *GRPCStream) reconnectLoop() {
 	for {
-		s.mu.Lock()
-		parentCtx := s.ctx
-		s.mu.Unlock()
-		if parentCtx.Err() != nil {
+		if s.rootCtx.Err() != nil {
 			return
 		}
 		time.Sleep(3 * time.Second)
 		log.Info("attempting gRPC market data reconnect")
+
+		conn, err := grpc.NewClient(s.grpcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			log.WithError(err).Warn("gRPC reconnect dial failed, retrying")
+			continue
+		}
 
 		subs := s.GetSubscriptions()
 		pbSubs := make([]*pb.Subscription, 0, len(subs))
@@ -164,24 +177,28 @@ func (s *GRPCStream) reconnectLoop() {
 			pbSubs = append(pbSubs, typesSubToPB(sub, s.exchangeName))
 		}
 
-		streamCtx, cancel := context.WithCancel(parentCtx)
-		client := pb.NewMarketDataServiceClient(s.conn)
+		streamCtx, streamCancel := context.WithCancel(s.rootCtx)
+		client := pb.NewMarketDataServiceClient(conn)
 		req := &pb.SubscribeRequest{Subscriptions: pbSubs}
 		stream, err := client.Subscribe(streamCtx, req)
 		if err != nil {
-			cancel()
+			streamCancel()
+			conn.Close()
 			log.WithError(err).Warn("gRPC reconnect failed, retrying")
 			continue
 		}
 
+		oldConn := s.conn
 		s.mu.Lock()
-		if s.cancel != nil {
-			s.cancel()
+		if s.streamCancel != nil {
+			s.streamCancel()
 		}
-		s.ctx = streamCtx
-		s.cancel = cancel
+		s.conn = conn
+		s.streamCtx = streamCtx
+		s.streamCancel = streamCancel
 		s.mu.Unlock()
 
+		oldConn.Close()
 		s.EmitConnect()
 		go s.receiveLoop(stream)
 		return

@@ -181,7 +181,7 @@ func TestTypesSubToPB_BookTicker(t *testing.T) {
 }
 
 func TestGRPCStreamSubscribeAndCollect(t *testing.T) {
-	s := NewGRPCStream(nil, "binance")
+	s := NewGRPCStream(nil, "binance", "localhost:9090")
 
 	s.Subscribe(types.KLineChannel, "BTCUSDT", types.SubscribeOptions{Interval: types.Interval1m})
 	s.Subscribe(types.BookChannel, "ETHUSDT", types.SubscribeOptions{Depth: "20"})
@@ -195,7 +195,7 @@ func TestGRPCStreamSubscribeAndCollect(t *testing.T) {
 }
 
 func TestGRPCStreamCallbacks(t *testing.T) {
-	s := NewGRPCStream(nil, "binance")
+	s := NewGRPCStream(nil, "binance", "localhost:9090")
 
 	var klineReceived types.KLine
 	var tradeReceived types.Trade
@@ -237,7 +237,7 @@ func TestGRPCStreamCallbacks(t *testing.T) {
 }
 
 func TestGRPCStreamKLineClosed(t *testing.T) {
-	s := NewGRPCStream(nil, "binance")
+	s := NewGRPCStream(nil, "binance", "localhost:9090")
 
 	var closedKline types.KLine
 	s.OnKLineClosed(func(k types.KLine) { closedKline = k })
@@ -261,7 +261,7 @@ func TestGRPCStreamKLineClosed(t *testing.T) {
 }
 
 func TestGRPCStreamDispatchBookSnapshot(t *testing.T) {
-	s := NewGRPCStream(nil, "binance")
+	s := NewGRPCStream(nil, "binance", "localhost:9090")
 
 	var snap types.SliceOrderBook
 	s.OnBookSnapshot(func(b types.SliceOrderBook) { snap = b })
@@ -280,13 +280,13 @@ func TestGRPCStreamDispatchBookSnapshot(t *testing.T) {
 }
 
 func TestGRPCStreamClose(t *testing.T) {
-	s := NewGRPCStream(nil, "binance")
+	s := NewGRPCStream(nil, "binance", "localhost:9090")
 	err := s.Close()
 	assert.NoError(t, err)
 }
 
 func TestGRPCStreamGetPublicOnly(t *testing.T) {
-	s := NewGRPCStream(nil, "binance")
+	s := NewGRPCStream(nil, "binance", "localhost:9090")
 	assert.True(t, s.GetPublicOnly())
 }
 
@@ -299,7 +299,7 @@ func TestSharedServiceSourceImplementsInterface(t *testing.T) {
 }
 
 func TestGRPCStreamResubscribeUpdatesSubs(t *testing.T) {
-	s := NewGRPCStream(nil, "binance")
+	s := NewGRPCStream(nil, "binance", "localhost:9090")
 	s.Subscribe(types.KLineChannel, "BTCUSDT", types.SubscribeOptions{Interval: types.Interval1m})
 
 	err := s.Resubscribe(func(oldSubs []types.Subscription) ([]types.Subscription, error) {
