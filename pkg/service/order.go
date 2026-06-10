@@ -108,7 +108,7 @@ func SelectLastOrders(driver string, ex types.ExchangeName, symbol string, isMar
 			"executed_quantity", "side", "is_working", "time_in_force",
 			"created_at", "updated_at", "is_margin", "is_futures", "is_isolated",
 			"order_uuid AS uuid", "actual_order_id",
-			"strategy_instance_id", "position_action",
+			"strategy_instance_id",
 		).
 			From("orders").
 			Where(sq.And{
@@ -216,7 +216,7 @@ func genOrderSQL(driver string, tableName string, options QueryOrdersOptions) st
 			"orders.is_margin", "orders.is_futures", "orders.is_isolated",
 			"orders.order_uuid AS uuid",
 			"orders.actual_order_id",
-			"orders.strategy_instance_id", "orders.position_action",
+			"orders.strategy_instance_id",
 		)
 	} else {
 		selColumns = append(selColumns, "orders.*")
@@ -273,14 +273,14 @@ func (s *OrderService) Insert(order types.Order) (err error) {
 	switch s.DB.DriverName() {
 	case "mysql":
 		_, err = s.DB.NamedExec(`
-			INSERT INTO `+"`"+tableName+"`"+` (exchange, order_id, client_order_id, order_type, status, symbol, price, stop_price, quantity, executed_quantity, side, is_working, time_in_force, created_at, updated_at, is_margin, is_futures, is_isolated, uuid, actual_order_id, strategy_instance_id, position_action)
-			VALUES (:exchange, :order_id, :client_order_id, :order_type, :status, :symbol, :price, :stop_price, :quantity, :executed_quantity, :side, :is_working, :time_in_force, :created_at, :updated_at, :is_margin, :is_futures, :is_isolated, IF(:uuid != '', UUID_TO_BIN(:uuid, true), ''), :actual_order_id, :strategy_instance_id, :position_action)
+			INSERT INTO `+"`"+tableName+"`"+` (exchange, order_id, client_order_id, order_type, status, symbol, price, stop_price, quantity, executed_quantity, side, is_working, time_in_force, created_at, updated_at, is_margin, is_futures, is_isolated, uuid, actual_order_id, strategy_instance_id)
+			VALUES (:exchange, :order_id, :client_order_id, :order_type, :status, :symbol, :price, :stop_price, :quantity, :executed_quantity, :side, :is_working, :time_in_force, :created_at, :updated_at, :is_margin, :is_futures, :is_isolated, IF(:uuid != '', UUID_TO_BIN(:uuid, true), ''), :actual_order_id, :strategy_instance_id)
 			ON DUPLICATE KEY UPDATE status=:status, executed_quantity=:executed_quantity, is_working=:is_working, updated_at=:updated_at`, order)
 
 	case "postgres":
 		_, err = s.DB.NamedExec(`
-			INSERT INTO "`+tableName+`" (exchange, order_id, client_order_id, order_type, status, symbol, price, stop_price, quantity, executed_quantity, side, is_working, time_in_force, created_at, updated_at, is_margin, is_futures, is_isolated, order_uuid, actual_order_id, strategy_instance_id, position_action, user_id)
-			VALUES (:exchange, :order_id, :client_order_id, :order_type, :status, :symbol, :price, :stop_price, :quantity, :executed_quantity, :side, :is_working, :time_in_force, :created_at, :updated_at, :is_margin, :is_futures, :is_isolated, :order_uuid, :actual_order_id, :strategy_instance_id, :position_action, :user_id)
+			INSERT INTO "`+tableName+`" (exchange, order_id, client_order_id, order_type, status, symbol, price, stop_price, quantity, executed_quantity, side, is_working, time_in_force, created_at, updated_at, is_margin, is_futures, is_isolated, order_uuid, actual_order_id, strategy_instance_id, user_id)
+			VALUES (:exchange, :order_id, :client_order_id, :order_type, :status, :symbol, :price, :stop_price, :quantity, :executed_quantity, :side, :is_working, :time_in_force, :created_at, :updated_at, :is_margin, :is_futures, :is_isolated, :order_uuid, :actual_order_id, :strategy_instance_id, :user_id)
 			ON CONFLICT (user_id, order_id, exchange) DO UPDATE SET status=:status, executed_quantity=:executed_quantity, is_working=:is_working, updated_at=:updated_at`,
 			map[string]interface{}{
 				"exchange":             order.Exchange,
@@ -304,14 +304,13 @@ func (s *OrderService) Insert(order types.Order) (err error) {
 				"order_uuid":           order.UUID,
 				"actual_order_id":      order.ActualOrderId,
 				"strategy_instance_id": order.StrategyInstanceID,
-				"position_action":      order.PositionAction,
 				"user_id":              s.UserID,
 			})
 
 	default: // sqlite3
 		_, err = s.DB.NamedExec(`
-			INSERT INTO `+"`"+tableName+"`"+` (exchange, order_id, client_order_id, order_type, status, symbol, price, stop_price, quantity, executed_quantity, side, is_working, time_in_force, created_at, updated_at, is_margin, is_futures, is_isolated, uuid, actual_order_id, strategy_instance_id, position_action)
-			VALUES (:exchange, :order_id, :client_order_id, :order_type, :status, :symbol, :price, :stop_price, :quantity, :executed_quantity, :side, :is_working, :time_in_force, :created_at, :updated_at, :is_margin, :is_futures, :is_isolated, :uuid, :actual_order_id, :strategy_instance_id, :position_action)
+			INSERT INTO `+"`"+tableName+"`"+` (exchange, order_id, client_order_id, order_type, status, symbol, price, stop_price, quantity, executed_quantity, side, is_working, time_in_force, created_at, updated_at, is_margin, is_futures, is_isolated, uuid, actual_order_id, strategy_instance_id)
+			VALUES (:exchange, :order_id, :client_order_id, :order_type, :status, :symbol, :price, :stop_price, :quantity, :executed_quantity, :side, :is_working, :time_in_force, :created_at, :updated_at, :is_margin, :is_futures, :is_isolated, :uuid, :actual_order_id, :strategy_instance_id)
 		`, order)
 	}
 

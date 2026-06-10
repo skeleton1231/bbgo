@@ -20,15 +20,6 @@ const (
 	PositionClosed = PositionType("Closed")
 )
 
-type PositionActionType string
-
-const (
-	PositionActionOpenLong   = PositionActionType("open_long")
-	PositionActionOpenShort  = PositionActionType("open_short")
-	PositionActionCloseLong  = PositionActionType("close_long")
-	PositionActionCloseShort = PositionActionType("close_short")
-)
-
 // ExchangeFee stores the exchange fee rate
 type ExchangeFee struct {
 	MakerFeeRate fixedpoint.Value

@@ -257,7 +257,7 @@ func detectLastestSelfTrade(ctx context.Context, db *sqlx.DB, sel SyncTask, reco
 			"exchange", "price", "quantity", "quote_quantity",
 			"symbol", "side", "is_buyer", "is_maker", "traded_at",
 			"fee", "fee_currency", "is_margin", "is_futures", "is_isolated",
-			"strategy", "strategy_instance_id", "pnl", "position_action",
+			"strategy", "strategy_instance_id", "pnl",
 		).From("trades").Where(squirrel.Eq{"trade_id": lastTradeId})
 	} else {
 		query = squirrel.Select("*").

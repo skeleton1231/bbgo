@@ -316,37 +316,6 @@ func (e *PaperTradeExchange) computePositionRiskLocked(symbol string) types.Posi
 	}
 }
 
-// computePositionActionLocked determines whether a fill opens or closes a futures position.
-// Must be called with e.mu held, BEFORE updateFuturesPositionLocked.
-func (e *PaperTradeExchange) computePositionActionLocked(symbol string, side types.SideType, quantity fixedpoint.Value) types.PositionActionType {
-	if !e.futuresSettings.IsFutures {
-		return ""
-	}
-
-	state, ok := e.futuresStates[symbol]
-	if !ok || state.PositionAmount.IsZero() {
-		if side == types.SideTypeBuy {
-			return types.PositionActionOpenLong
-		}
-		return types.PositionActionOpenShort
-	}
-
-	switch {
-	case state.PositionAmount.Sign() > 0:
-		if side == types.SideTypeBuy {
-			return types.PositionActionOpenLong
-		}
-		return types.PositionActionCloseLong
-
-	case state.PositionAmount.Sign() < 0:
-		if side == types.SideTypeBuy {
-			return types.PositionActionCloseShort
-		}
-		return types.PositionActionOpenShort
-	}
-
-	return ""
-}
 
 // updateFuturesPositionLocked updates the futures state after a fill.
 // Must be called with e.mu held (caller acquires it around this call).

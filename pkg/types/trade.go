@@ -108,9 +108,6 @@ type Trade struct {
 	// PnL is the profit and loss value of the executed trade
 	PnL sql.NullFloat64 `json:"pnl" db:"pnl"`
 
-	// PositionAction indicates whether this trade opens or closes a futures position
-	PositionAction PositionActionType `json:"positionAction,omitempty" db:"position_action"`
-
 	InsertedAt *Time `json:"insertedAt" db:"inserted_at"`
 
 	Tag string `json:"tags" db:"-"`

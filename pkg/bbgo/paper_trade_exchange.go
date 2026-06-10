@@ -340,14 +340,11 @@ func (m *paperMatchingBook) buildFillLocked(order types.Order, fillPrice fixedpo
 
 	// Update futures position tracking under the exchange mutex.
 	// Lock ordering: m.mu -> e.mu is safe; no reverse path exists.
-	var positionAction types.PositionActionType
 	if m.Parent != nil && isFutures {
 		m.Parent.mu.Lock()
-		positionAction = m.Parent.computePositionActionLocked(order.Symbol, order.Side, order.Quantity)
 		m.Parent.updateFuturesPositionLocked(order.Symbol, order.Side, fillPrice, order.Quantity, order.StrategyInstanceID)
 		m.Parent.mu.Unlock()
 	}
-	trade.PositionAction = positionAction
 
 	filled := order
 	filled.Status = types.OrderStatusFilled
@@ -355,7 +352,6 @@ func (m *paperMatchingBook) buildFillLocked(order types.Order, fillPrice fixedpo
 	filled.AveragePrice = fillPrice
 	filled.IsWorking = false
 	filled.UpdateTime = now
-	filled.PositionAction = positionAction
 
 	return paperFill{
 		Trade:    trade,
