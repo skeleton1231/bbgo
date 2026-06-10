@@ -158,21 +158,13 @@ func (s *FuturesService) Insert(risk types.PositionRisk) (err error) {
 			exchange, symbol, position_side, entry_price, leverage, liquidation_price,
 			mark_price, break_even_price, unrealized_pnl, notional, initial_margin, maint_margin,
 			position_initial_margin, open_order_initial_margin, adl, margin_asset,
-			position_amount, updated_at, user_id
+			position_amount, updated_at, strategy_instance_id, user_id
 		) VALUES (
 			:exchange, :symbol, :position_side, :entry_price, :leverage, :liquidation_price,
 			:mark_price, :break_even_price, :unrealized_pnl, :notional, :initial_margin, :maint_margin,
 			:position_initial_margin, :open_order_initial_margin, :adl, :margin_asset,
-			:position_amount, :updated_at, :user_id
-		) ON CONFLICT (user_id, exchange, symbol, position_side) DO UPDATE SET
-			entry_price=:entry_price, leverage=:leverage, liquidation_price=:liquidation_price,
-			mark_price=:mark_price, break_even_price=:break_even_price,
-			unrealized_pnl=:unrealized_pnl, notional=:notional,
-			initial_margin=:initial_margin, maint_margin=:maint_margin,
-			position_initial_margin=:position_initial_margin,
-			open_order_initial_margin=:open_order_initial_margin,
-			adl=:adl, margin_asset=:margin_asset,
-			position_amount=:position_amount, updated_at=:updated_at`,
+			:position_amount, :updated_at, :strategy_instance_id, :user_id
+	)`,
 			map[string]interface{}{
 				"exchange":                  risk.Exchange,
 				"symbol":                    risk.Symbol,
@@ -192,6 +184,7 @@ func (s *FuturesService) Insert(risk types.PositionRisk) (err error) {
 				"margin_asset":              risk.MarginAsset,
 				"position_amount":           risk.PositionAmount,
 				"updated_at":                risk.UpdateTime.Time(),
+			"strategy_instance_id":     risk.StrategyInstanceID,
 				"user_id":                   s.UserID,
 			})
 

@@ -361,6 +361,8 @@ type Order struct {
 	IsIsolated bool `json:"isIsolated,omitempty" db:"is_isolated"`
 	// StrategyInstanceID is the unique strategy instance identifier, copied from SubmitOrder.Tag
 	StrategyInstanceID string `json:"strategyInstanceID,omitempty" db:"strategy_instance_id"`
+	// PositionAction indicates whether this order opens or closes a futures position (open_long, open_short, close_long, close_short)
+	PositionAction PositionActionType `json:"positionAction,omitempty" db:"position_action"`
 }
 
 func (o *Order) LogFields() logrus.Fields {

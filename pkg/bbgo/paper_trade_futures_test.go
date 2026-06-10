@@ -78,7 +78,7 @@ func TestPaperTradeExchange_QueryPositionRisk_AfterTrade(t *testing.T) {
 	e.SetLeverage(context.Background(), "BTCUSDT", 20)
 
 	e.mu.Lock()
-	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(1.0))
+	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(1.0), "")
 	e.mu.Unlock()
 
 	risks, err := e.QueryPositionRisk(context.Background(), "BTCUSDT")
@@ -100,7 +100,7 @@ func TestPaperTradeExchange_ShortPosition(t *testing.T) {
 	e.SetLeverage(context.Background(), "BTCUSDT", 10)
 
 	e.mu.Lock()
-	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeSell, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(1.0))
+	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeSell, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(1.0), "")
 	e.mu.Unlock()
 
 	state := e.futuresStates["BTCUSDT"]
@@ -118,8 +118,8 @@ func TestPaperTradeExchange_CloseLongPosition(t *testing.T) {
 	e.UseFutures()
 
 	e.mu.Lock()
-	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(1.0))
-	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeSell, fixedpoint.NewFromFloat(51000.0), fixedpoint.NewFromFloat(1.0))
+	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(1.0), "")
+	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeSell, fixedpoint.NewFromFloat(51000.0), fixedpoint.NewFromFloat(1.0), "")
 	e.mu.Unlock()
 
 	state := e.futuresStates["BTCUSDT"]
@@ -132,9 +132,9 @@ func TestPaperTradeExchange_FlipLongToShort(t *testing.T) {
 
 	e.mu.Lock()
 	// Long 0.5 BTC
-	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(0.5))
+	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(0.5), "")
 	// Sell 1.0 BTC → flips to short 0.5
-	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeSell, fixedpoint.NewFromFloat(52000.0), fixedpoint.NewFromFloat(1.0))
+	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeSell, fixedpoint.NewFromFloat(52000.0), fixedpoint.NewFromFloat(1.0), "")
 	e.mu.Unlock()
 
 	state := e.futuresStates["BTCUSDT"]
@@ -150,9 +150,9 @@ func TestPaperTradeExchange_FlipShortToLong(t *testing.T) {
 
 	e.mu.Lock()
 	// Short 0.5 BTC
-	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeSell, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(0.5))
+	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeSell, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(0.5), "")
 	// Buy 1.0 BTC → flips to long 0.5
-	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(48000.0), fixedpoint.NewFromFloat(1.0))
+	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(48000.0), fixedpoint.NewFromFloat(1.0), "")
 	e.mu.Unlock()
 
 	state := e.futuresStates["BTCUSDT"]
@@ -168,9 +168,9 @@ func TestPaperTradeExchange_WeightedAverageEntry(t *testing.T) {
 
 	e.mu.Lock()
 	// Buy 1 at 50000
-	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(1.0))
+	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(1.0), "")
 	// Buy 1 at 52000 → weighted avg = (50000*1 + 52000*1) / 2 = 51000
-	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(52000.0), fixedpoint.NewFromFloat(1.0))
+	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(52000.0), fixedpoint.NewFromFloat(1.0), "")
 	e.mu.Unlock()
 
 	state := e.futuresStates["BTCUSDT"]
@@ -184,7 +184,7 @@ func TestPaperTradeExchange_LiquidationPrice_Long(t *testing.T) {
 	e.SetLeverage(context.Background(), "BTCUSDT", 10)
 
 	e.mu.Lock()
-	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(1.0))
+	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(1.0), "")
 	e.mu.Unlock()
 
 	risks, err := e.QueryPositionRisk(context.Background(), "BTCUSDT")
@@ -192,8 +192,9 @@ func TestPaperTradeExchange_LiquidationPrice_Long(t *testing.T) {
 	require.Len(t, risks, 1)
 
 	// Long liquidation = entry * (1 - 1/leverage + maintRate)
-	// = 50000 * (1 - 0.1 + 0.005) = 50000 * 0.905 = 45250
-	expected := fixedpoint.NewFromFloat(45250.0)
+	// Notional = 50000, tier 1 rate = 0.004
+	// = 50000 * (1 - 0.1 + 0.004) = 50000 * 0.904 = 45200
+	expected := fixedpoint.NewFromFloat(45200.0)
 	assert.True(t, risks[0].LiquidationPrice.Compare(expected) == 0,
 		"expected %s, got %s", expected.String(), risks[0].LiquidationPrice.String())
 }
@@ -204,7 +205,7 @@ func TestPaperTradeExchange_LiquidationPrice_Short(t *testing.T) {
 	e.SetLeverage(context.Background(), "BTCUSDT", 10)
 
 	e.mu.Lock()
-	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeSell, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(1.0))
+	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeSell, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(1.0), "")
 	e.mu.Unlock()
 
 	risks, err := e.QueryPositionRisk(context.Background(), "BTCUSDT")
@@ -212,8 +213,9 @@ func TestPaperTradeExchange_LiquidationPrice_Short(t *testing.T) {
 	require.Len(t, risks, 1)
 
 	// Short liquidation = entry * (1 + 1/leverage - maintRate)
-	// = 50000 * (1 + 0.1 - 0.005) = 50000 * 1.095 = 54750
-	expected := fixedpoint.NewFromFloat(54750.0)
+	// Notional = 50000, tier 1 rate = 0.004
+	// = 50000 * (1 + 0.1 - 0.004) = 50000 * 1.096 = 54800
+	expected := fixedpoint.NewFromFloat(54800.0)
 	assert.True(t, risks[0].LiquidationPrice.Compare(expected) == 0,
 		"expected %s, got %s", expected.String(), risks[0].LiquidationPrice.String())
 }
@@ -224,7 +226,7 @@ func TestPaperTradeExchange_UnrealizedPnL(t *testing.T) {
 
 	e.mu.Lock()
 	// Long 1 BTC at 50000
-	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(1.0))
+	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(1.0), "")
 	// Set mark price to 52000
 	book := e.matchingBooks["BTCUSDT"]
 	book.lastPrice = fixedpoint.NewFromFloat(52000.0)
@@ -328,8 +330,8 @@ func TestPaperTradeExchange_QueryAllPositionRisks(t *testing.T) {
 	e.UseFutures()
 
 	e.mu.Lock()
-	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(1.0))
-	e.updateFuturesPositionLocked("ETHUSDT", types.SideTypeSell, fixedpoint.NewFromFloat(3000.0), fixedpoint.NewFromFloat(2.0))
+	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(1.0), "")
+	e.updateFuturesPositionLocked("ETHUSDT", types.SideTypeSell, fixedpoint.NewFromFloat(3000.0), fixedpoint.NewFromFloat(2.0), "")
 	e.mu.Unlock()
 
 	risks, err := e.QueryPositionRisk(context.Background())
@@ -383,7 +385,7 @@ func TestPaperTradeExchange_QueryPositionRisk_WithOpenPosition(t *testing.T) {
 	e.UseFutures()
 
 	e.mu.Lock()
-	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(1.0))
+	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(1.0), "")
 	e.mu.Unlock()
 
 	risks, err := e.QueryPositionRisk(context.Background())
@@ -399,8 +401,8 @@ func TestPaperTradeExchange_QueryPositionRisk_ClosedPositionReturnsZero(t *testi
 
 	// Open and close a position
 	e.mu.Lock()
-	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(1.0))
-	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeSell, fixedpoint.NewFromFloat(51000.0), fixedpoint.NewFromFloat(1.0))
+	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(1.0), "")
+	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeSell, fixedpoint.NewFromFloat(51000.0), fixedpoint.NewFromFloat(1.0), "")
 	e.mu.Unlock()
 
 	// Should still return a risk row with position_amount=0 so FuturesService can update DB
@@ -416,9 +418,9 @@ func TestPaperTradeExchange_PartialClosePosition(t *testing.T) {
 
 	e.mu.Lock()
 	// Long 1 BTC at 50000
-	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(1.0))
+	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(1.0), "")
 	// Partial close: sell 0.4 at 52000
-	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeSell, fixedpoint.NewFromFloat(52000.0), fixedpoint.NewFromFloat(0.4))
+	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeSell, fixedpoint.NewFromFloat(52000.0), fixedpoint.NewFromFloat(0.4), "")
 	e.mu.Unlock()
 
 	state := e.futuresStates["BTCUSDT"]
@@ -433,7 +435,7 @@ func TestPaperTradeExchange_UpdateFuturesPosition_NonFutures(t *testing.T) {
 	// Don't call UseFutures()
 
 	e.mu.Lock()
-	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(1.0))
+	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(1.0), "")
 	e.mu.Unlock()
 
 	// Should not create state when not in futures mode
@@ -449,7 +451,7 @@ func TestPaperTradeExchange_MarginAsset_FromMarket(t *testing.T) {
 	state.MarginAsset = "" // reset to test auto-detection
 
 	e.mu.Lock()
-	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(0.1))
+	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(0.1), "")
 	e.mu.Unlock()
 
 	assert.Equal(t, "USDT", state.MarginAsset)

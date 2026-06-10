@@ -125,5 +125,10 @@ func TestTradeService_Query(t *testing.T) {
 
 func Test_genTradeSelectColumns(t *testing.T) {
 	assert.Equal(t, []string{"*"}, genTradeSelectColumns("sqlite3"))
-	assert.Equal(t, []string{"gid", "id", "order_id", binUuidSelector("trades", "order_uuid"), "exchange", "price", "quantity", "quote_quantity", "symbol", "side", "is_buyer", "is_maker", "traded_at", "fee", "fee_currency", "is_margin", "is_futures", "is_isolated", "strategy", "strategy_instance_id", "pnl", "inserted_at"}, genTradeSelectColumns("mysql"))
+	assert.Equal(t, []string{"gid", "id", "order_id", binUuidSelector("trades", "order_uuid"), "exchange", "price", "quantity", "quote_quantity", "symbol", "side", "is_buyer", "is_maker", "traded_at", "fee", "fee_currency", "is_margin", "is_futures", "is_isolated", "strategy", "strategy_instance_id", "pnl", "position_action", "inserted_at"}, genTradeSelectColumns("mysql"))
+	t.Run("postgres uses trade_id AS id", func(t *testing.T) {
+		cols := genTradeSelectColumns("postgres")
+		assert.Contains(t, cols, "trade_id AS id")
+		assert.NotContains(t, cols, "*")
+	})
 }

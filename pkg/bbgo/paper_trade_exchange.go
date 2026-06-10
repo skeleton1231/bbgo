@@ -55,6 +55,7 @@ type paperMatchingBook struct {
 	mu          sync.Mutex
 	bidOrders   []types.Order
 	askOrders   []types.Order
+	stopOrders  []types.Order // stop orders waiting for price trigger
 	lastPrice   fixedpoint.Value
 	currentTime time.Time
 
@@ -100,9 +101,10 @@ func (m *paperMatchingBook) LastPrice() fixedpoint.Value {
 func (m *paperMatchingBook) OpenOrders() []types.Order {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	orders := make([]types.Order, 0, len(m.bidOrders)+len(m.askOrders))
+	orders := make([]types.Order, 0, len(m.bidOrders)+len(m.askOrders)+len(m.stopOrders))
 	orders = append(orders, m.bidOrders...)
 	orders = append(orders, m.askOrders...)
+	orders = append(orders, m.stopOrders...)
 	return orders
 }
 
@@ -111,6 +113,9 @@ func (m *paperMatchingBook) ProcessKLine(kline types.KLine) {
 	m.currentTime = kline.EndTime.Time()
 
 	var fills []paperFill
+
+	// Check stop order triggers first — kline high/low determines if stop price was crossed.
+	fills = append(fills, m.checkStopTriggers(kline.High, kline.Low)...)
 
 	if m.lastPrice.IsZero() {
 		m.lastPrice = kline.Open
@@ -219,6 +224,63 @@ func (m *paperMatchingBook) emitFills(fills []paperFill) {
 	}
 }
 
+// checkStopTriggers processes stop orders whose stop price was crossed by the kline.
+// Triggered stops are immediately filled at market price (stop-market) or limit price (stop-limit).
+func (m *paperMatchingBook) checkStopTriggers(high, low fixedpoint.Value) []paperFill {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var fills []paperFill
+	var remaining []types.Order
+
+	for _, order := range m.stopOrders {
+		stopPrice := order.StopPrice
+		if stopPrice.IsZero() {
+			remaining = append(remaining, order)
+			continue
+		}
+
+		triggered := false
+		switch order.Side {
+		case types.SideTypeBuy:
+			// Buy stop triggers when price rises above stop price
+			if high.Compare(stopPrice) >= 0 {
+				triggered = true
+			}
+		case types.SideTypeSell:
+			// Sell stop triggers when price falls below stop price
+			if low.Compare(stopPrice) <= 0 {
+				triggered = true
+			}
+		}
+
+		if !triggered {
+			remaining = append(remaining, order)
+			continue
+		}
+
+		fillPrice := order.Price
+		if order.Type == types.OrderTypeStopMarket || fillPrice.IsZero() {
+			fillPrice = m.lastPrice
+			if fillPrice.IsZero() {
+				fillPrice = stopPrice
+			}
+		}
+		fillPrice = m.Market.TruncatePrice(fillPrice)
+
+		order.Status = types.OrderStatusFilled
+		order.ExecutedQuantity = order.Quantity
+		order.IsWorking = false
+		order.Price = fillPrice
+		fills = append(fills, m.buildFillLocked(order, fillPrice))
+		log.Infof("[papertrade] STOP TRIGGERED: order=%d %s %s stop=%s fill=%s qty=%s",
+			order.OrderID, order.Side, order.Symbol, stopPrice.String(), fillPrice.String(), order.Quantity.String())
+	}
+
+	m.stopOrders = remaining
+	return fills
+}
+
 func (m *paperMatchingBook) buildFillLocked(order types.Order, fillPrice fixedpoint.Value) paperFill {
 	now := types.Time(m.currentTime)
 	if time.Time(now).IsZero() {
@@ -278,11 +340,14 @@ func (m *paperMatchingBook) buildFillLocked(order types.Order, fillPrice fixedpo
 
 	// Update futures position tracking under the exchange mutex.
 	// Lock ordering: m.mu -> e.mu is safe; no reverse path exists.
+	var positionAction types.PositionActionType
 	if m.Parent != nil && isFutures {
 		m.Parent.mu.Lock()
-		m.Parent.updateFuturesPositionLocked(order.Symbol, order.Side, fillPrice, order.Quantity)
+		positionAction = m.Parent.computePositionActionLocked(order.Symbol, order.Side, order.Quantity)
+		m.Parent.updateFuturesPositionLocked(order.Symbol, order.Side, fillPrice, order.Quantity, order.StrategyInstanceID)
 		m.Parent.mu.Unlock()
 	}
+	trade.PositionAction = positionAction
 
 	filled := order
 	filled.Status = types.OrderStatusFilled
@@ -290,6 +355,7 @@ func (m *paperMatchingBook) buildFillLocked(order types.Order, fillPrice fixedpo
 	filled.AveragePrice = fillPrice
 	filled.IsWorking = false
 	filled.UpdateTime = now
+	filled.PositionAction = positionAction
 
 	return paperFill{
 		Trade:    trade,
@@ -303,28 +369,52 @@ func (m *paperMatchingBook) CancelOrder(order types.Order) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	switch order.Side {
-	case types.SideTypeBuy:
-		var remaining []types.Order
-		for _, o := range m.bidOrders {
-			if o.OrderID == order.OrderID {
-				m.Account.UnlockBalance(m.Market.QuoteCurrency, o.Price.Mul(o.Quantity))
-				continue
-			}
-			remaining = append(remaining, o)
-		}
-		m.bidOrders = remaining
+	isStop := order.Type == types.OrderTypeStopLimit || order.Type == types.OrderTypeStopMarket ||
+		order.Type == types.OrderTypeTakeProfit || order.Type == types.OrderTypeTakeProfitMarket
 
-	case types.SideTypeSell:
+	if isStop {
 		var remaining []types.Order
-		for _, o := range m.askOrders {
+		for _, o := range m.stopOrders {
 			if o.OrderID == order.OrderID {
-				m.Account.UnlockBalance(m.Market.BaseCurrency, o.Quantity)
+				// Unlock the margin that was locked when the stop was placed
+				if m.Parent != nil && (m.Parent.futuresSettings.IsFutures || m.Parent.marginSettings.IsMargin) {
+					leverage := m.Parent.effectiveLeverage(order.Symbol)
+					lockAmt := order.Quantity.Mul(order.StopPrice).Div(leverage)
+					m.Account.UnlockBalance(m.Market.QuoteCurrency, lockAmt)
+				} else if order.Side == types.SideTypeBuy {
+					m.Account.UnlockBalance(m.Market.QuoteCurrency, order.Price.Mul(order.Quantity))
+				} else {
+					m.Account.UnlockBalance(m.Market.BaseCurrency, order.Quantity)
+				}
 				continue
 			}
 			remaining = append(remaining, o)
 		}
-		m.askOrders = remaining
+		m.stopOrders = remaining
+	} else {
+		switch order.Side {
+		case types.SideTypeBuy:
+			var remaining []types.Order
+			for _, o := range m.bidOrders {
+				if o.OrderID == order.OrderID {
+					m.Account.UnlockBalance(m.Market.QuoteCurrency, o.Price.Mul(o.Quantity))
+					continue
+				}
+				remaining = append(remaining, o)
+			}
+			m.bidOrders = remaining
+
+		case types.SideTypeSell:
+			var remaining []types.Order
+			for _, o := range m.askOrders {
+				if o.OrderID == order.OrderID {
+					m.Account.UnlockBalance(m.Market.BaseCurrency, o.Quantity)
+					continue
+				}
+				remaining = append(remaining, o)
+			}
+			m.askOrders = remaining
+		}
 	}
 
 	canceled := order
@@ -490,6 +580,14 @@ func (e *PaperTradeExchange) RestoreFromDB(ctx context.Context) error {
 	}
 
 	log.Infof("paper trade: restored %d open orders from DB (max order ID: %d)", len(orders), maxOrderID)
+
+	// 3. Restore futures positions if futures mode is enabled.
+	if e.futuresSettings.IsFutures {
+		if err := e.restoreFuturesPositions(ctx); err != nil {
+			log.WithError(err).Warn("paper trade: failed to restore futures positions from DB")
+		}
+	}
+
 	return nil
 }
 
@@ -564,6 +662,84 @@ func (e *PaperTradeExchange) queryBalances(ctx context.Context) (types.BalanceMa
 		balances[b.Currency] = b
 	}
 	return balances, rows.Err()
+}
+
+// restoreFuturesPositions loads open futures positions from the latest
+// futures_position_risks snapshot and restores paperFuturesState so the
+// paper engine continues existing positions after a container restart.
+func (e *PaperTradeExchange) restoreFuturesPositions(ctx context.Context) error {
+	if e.db == nil {
+		return nil
+	}
+
+	tableName := e.tableName("futures_position_risks")
+	var query string
+	var args []interface{}
+
+	if e.db.DriverName() == "postgres" {
+		// Get the latest row per symbol where position_amount != '0'
+		query = `SELECT DISTINCT ON (symbol) symbol, position_side, leverage, entry_price, position_amount, margin_asset, strategy_instance_id
+			FROM "` + tableName + `"
+			WHERE user_id = $1 AND position_amount != '0'
+			ORDER BY symbol, updated_at DESC`
+		args = append(args, e.userID)
+	} else {
+		query = `SELECT symbol, position_side, leverage, entry_price, position_amount, margin_asset, strategy_instance_id
+			FROM ` + tableName + `
+			WHERE position_amount != 0
+			GROUP BY symbol
+			HAVING gid = MAX(gid)`
+	}
+
+	rows, err := e.db.QueryxContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("query futures positions: %w", err)
+	}
+	defer rows.Close()
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	var restored int
+	for rows.Next() {
+		var r struct {
+			Symbol             string          `db:"symbol"`
+			PositionSide       string          `db:"position_side"`
+			Leverage           fixedpoint.Value `db:"leverage"`
+			EntryPrice         fixedpoint.Value `db:"entry_price"`
+			PositionAmount     fixedpoint.Value `db:"position_amount"`
+			MarginAsset        string          `db:"margin_asset"`
+			StrategyInstanceID string          `db:"strategy_instance_id"`
+		}
+		if err := rows.StructScan(&r); err != nil {
+			return fmt.Errorf("scan futures position: %w", err)
+		}
+
+		if r.PositionAmount.IsZero() {
+			continue
+		}
+
+		lev := 20
+		if !r.Leverage.IsZero() {
+			lev = int(r.Leverage.Int64())
+		}
+
+		state := &paperFuturesState{
+			Leverage:           lev,
+			PositionAmount:     r.PositionAmount,
+			EntryPrice:         r.EntryPrice,
+			PositionSide:       types.PositionType(r.PositionSide),
+			MarginAsset:        r.MarginAsset,
+			StrategyInstanceID: r.StrategyInstanceID,
+		}
+		e.futuresStates[r.Symbol] = state
+		restored++
+	}
+
+	if restored > 0 {
+		log.Infof("paper trade: restored %d futures positions from DB", restored)
+	}
+	return rows.Err()
 }
 
 // syncBalances writes current balances to the database.
@@ -746,6 +922,19 @@ func (e *PaperTradeExchange) SubmitOrder(ctx context.Context, submit types.Submi
 	matching.EmitOrderUpdate(order)
 
 	// Market orders and taker limit orders fill immediately at market price
+	isStop := submit.Type == types.OrderTypeStopLimit || submit.Type == types.OrderTypeStopMarket ||
+		submit.Type == types.OrderTypeTakeProfit || submit.Type == types.OrderTypeTakeProfitMarket
+
+	if isStop {
+		matching.mu.Lock()
+		matching.stopOrders = append(matching.stopOrders, order)
+		matching.mu.Unlock()
+
+		log.Infof("[papertrade] stop order placed: %s %s %s stop=%s price=%s qty=%s id=%d",
+			order.Side, order.Type, order.Symbol, order.StopPrice.String(), order.Price.String(), order.Quantity.String(), order.OrderID)
+		return &order, nil
+	}
+
 	isTaker := submit.Type == types.OrderTypeMarket || isPaperLimitTaker(submit, matching.LastPrice())
 	if isTaker {
 		fillPrice := price

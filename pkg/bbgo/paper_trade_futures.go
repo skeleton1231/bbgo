@@ -7,21 +7,26 @@ import (
 
 	"github.com/c9s/bbgo/pkg/fixedpoint"
 	"github.com/c9s/bbgo/pkg/types"
+	log "github.com/sirupsen/logrus"
 )
 
 const (
 	defaultMaintMarginRate  = "0.005"
 	defaultHourlyMarginRate = "0.0001"
+	defaultFundingRate      = "0.0001" // 0.01% per 8h — typical Binance perpetual rate
+	fundingInterval         = 8 * time.Hour
 )
 
 // paperFuturesState tracks simulated futures state per symbol.
 type paperFuturesState struct {
-	Leverage       int
-	PositionAmount fixedpoint.Value // positive = long, negative = short
-	EntryPrice     fixedpoint.Value
-	PositionSide   types.PositionType
-	MarginAsset    string
-	IsolatedSymbol string
+	Leverage           int
+	PositionAmount     fixedpoint.Value // positive = long, negative = short
+	EntryPrice         fixedpoint.Value
+	PositionSide       types.PositionType
+	MarginAsset        string
+	IsolatedSymbol     string
+	StrategyInstanceID string
+	LastFundingTime    time.Time
 }
 
 // paperMarginState tracks simulated margin borrow/lend state per asset.
@@ -198,6 +203,33 @@ func (e *PaperTradeExchange) getOrCreateMarginState(asset string) *paperMarginSt
 	return state
 }
 
+// maintMarginTier represents a tier in the tiered maintenance margin schedule.
+type maintMarginTier struct {
+	NotionalCap fixedpoint.Value // upper bound of this tier (0 = unlimited)
+	Rate        fixedpoint.Value // maintenance margin rate for this tier
+}
+
+// binanceBTCMaintenanceTiers approximates Binance BTCUSDT perpetual maintenance margin tiers.
+// Smaller positions use 0.4%, larger positions use progressively higher rates.
+var binanceBTCMaintenanceTiers = []maintMarginTier{
+	{NotionalCap: fixedpoint.MustNewFromString("50000"), Rate: fixedpoint.MustNewFromString("0.004")},
+	{NotionalCap: fixedpoint.MustNewFromString("250000"), Rate: fixedpoint.MustNewFromString("0.005")},
+	{NotionalCap: fixedpoint.MustNewFromString("1000000"), Rate: fixedpoint.MustNewFromString("0.01")},
+	{NotionalCap: fixedpoint.MustNewFromString("5000000"), Rate: fixedpoint.MustNewFromString("0.025")},
+	{NotionalCap: fixedpoint.MustNewFromString("10000000"), Rate: fixedpoint.MustNewFromString("0.05")},
+	{NotionalCap: fixedpoint.Zero, Rate: fixedpoint.MustNewFromString("0.1")}, // unlimited
+}
+
+// getMaintenanceMarginRate returns the effective maintenance margin rate based on notional value.
+func getMaintenanceMarginRate(notional fixedpoint.Value) fixedpoint.Value {
+	for _, tier := range binanceBTCMaintenanceTiers {
+		if tier.NotionalCap.IsZero() || notional.Compare(tier.NotionalCap) <= 0 {
+			return tier.Rate
+		}
+	}
+	return binanceBTCMaintenanceTiers[len(binanceBTCMaintenanceTiers)-1].Rate
+}
+
 // computePositionRiskLocked calculates simulated position risk from current state.
 // Returns a risk with position_amount=0 for closed positions, so bbgo's FuturesService
 // can persist the closed state to the database.
@@ -220,7 +252,8 @@ func (e *PaperTradeExchange) computePositionRiskLocked(symbol string) types.Posi
 			Leverage:       fixedpoint.NewFromInt(int64(state.Leverage)),
 			MarginAsset:    state.MarginAsset,
 			PositionAmount: fixedpoint.Zero,
-			UpdateTime:     types.MillisecondTimestamp(time.Now()),
+			UpdateTime:             types.MillisecondTimestamp(time.Now()),
+			StrategyInstanceID:     state.StrategyInstanceID,
 		}
 	}
 
@@ -236,7 +269,7 @@ func (e *PaperTradeExchange) computePositionRiskLocked(symbol string) types.Posi
 	leverage := fixedpoint.NewFromInt(int64(state.Leverage))
 	initialMargin := notional.Div(leverage)
 
-	maintRate := fixedpoint.MustNewFromString(defaultMaintMarginRate)
+	maintRate := getMaintenanceMarginRate(notional)
 	maintMargin := notional.Mul(maintRate)
 
 	var unrealizedPnL fixedpoint.Value
@@ -279,12 +312,45 @@ func (e *PaperTradeExchange) computePositionRiskLocked(symbol string) types.Posi
 		MarginAsset:            state.MarginAsset,
 		PositionAmount:         state.PositionAmount,
 		UpdateTime:             types.MillisecondTimestamp(time.Now()),
+		StrategyInstanceID:     state.StrategyInstanceID,
 	}
+}
+
+// computePositionActionLocked determines whether a fill opens or closes a futures position.
+// Must be called with e.mu held, BEFORE updateFuturesPositionLocked.
+func (e *PaperTradeExchange) computePositionActionLocked(symbol string, side types.SideType, quantity fixedpoint.Value) types.PositionActionType {
+	if !e.futuresSettings.IsFutures {
+		return ""
+	}
+
+	state, ok := e.futuresStates[symbol]
+	if !ok || state.PositionAmount.IsZero() {
+		if side == types.SideTypeBuy {
+			return types.PositionActionOpenLong
+		}
+		return types.PositionActionOpenShort
+	}
+
+	switch {
+	case state.PositionAmount.Sign() > 0:
+		if side == types.SideTypeBuy {
+			return types.PositionActionOpenLong
+		}
+		return types.PositionActionCloseLong
+
+	case state.PositionAmount.Sign() < 0:
+		if side == types.SideTypeBuy {
+			return types.PositionActionCloseShort
+		}
+		return types.PositionActionOpenShort
+	}
+
+	return ""
 }
 
 // updateFuturesPositionLocked updates the futures state after a fill.
 // Must be called with e.mu held (caller acquires it around this call).
-func (e *PaperTradeExchange) updateFuturesPositionLocked(symbol string, side types.SideType, price, quantity fixedpoint.Value) {
+func (e *PaperTradeExchange) updateFuturesPositionLocked(symbol string, side types.SideType, price, quantity fixedpoint.Value, strategyInstanceID string) {
 	if !e.futuresSettings.IsFutures {
 		return
 	}
@@ -350,8 +416,12 @@ func (e *PaperTradeExchange) updateFuturesPositionLocked(symbol string, side typ
 	} else {
 		state.PositionSide = types.PositionType("")
 	}
-}
 
+	if strategyInstanceID != "" {
+		state.StrategyInstanceID = strategyInstanceID
+	}
+
+}
 // updateMarginInterest accrues simulated interest on borrowed assets.
 func (e *PaperTradeExchange) updateMarginInterest() {
 	e.mu.Lock()
@@ -390,13 +460,79 @@ func (e *PaperTradeExchange) StartMarginInterestTimer(ctx context.Context) {
 	}()
 }
 
-// StartBackgroundServices starts background tasks for margin interest accrual.
-// Futures position risk is handled by bbgo's FuturesService via trade callbacks
-// (see environment.go futuresPositionWriterCreator), not by a separate sync loop.
+// StartBackgroundServices starts background tasks for margin interest accrual
+// and futures funding rate simulation.
 func (e *PaperTradeExchange) StartBackgroundServices(ctx context.Context) {
 	if e.marginSettings.IsMargin {
 		e.StartMarginInterestTimer(ctx)
 	}
+	if e.futuresSettings.IsFutures {
+		e.StartFundingRateTimer(ctx)
+	}
+}
+
+// applyFundingRate applies funding rate payments to all open futures positions.
+// Positive rate: longs pay shorts. Negative rate: shorts pay longs.
+// Funding = position_amount × mark_price × funding_rate
+func (e *PaperTradeExchange) applyFundingRate() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	now := time.Now()
+	rate := fixedpoint.MustNewFromString(defaultFundingRate)
+
+	for symbol, state := range e.futuresStates {
+		if state.PositionAmount.IsZero() {
+			continue
+		}
+		if !state.LastFundingTime.IsZero() && now.Sub(state.LastFundingTime) < fundingInterval {
+			continue
+		}
+
+		var markPrice fixedpoint.Value
+		if book, ok := e.matchingBooks[symbol]; ok {
+			markPrice = book.lastPrice
+		}
+		if markPrice.IsZero() {
+			markPrice = state.EntryPrice
+		}
+
+		notional := state.PositionAmount.Abs().Mul(markPrice)
+		fundingAmount := notional.Mul(rate)
+
+		asset := state.MarginAsset
+		if asset == "" {
+			asset = "USDT"
+		}
+
+		// Longs pay (negative), shorts receive (positive) when rate > 0
+		if state.PositionAmount.Sign() > 0 {
+			e.account.AddBalance(asset, fundingAmount.Neg())
+		} else {
+			e.account.AddBalance(asset, fundingAmount)
+		}
+
+		state.LastFundingTime = now
+		log.Infof("paper trade: funding rate applied for %s — notional=%s rate=%s funding=%s %s (position_side=%s)",
+			symbol, notional.String(), rate.String(), fundingAmount.String(), asset, state.PositionSide)
+	}
+}
+
+// StartFundingRateTimer starts a goroutine that applies funding rate every 8 hours.
+func (e *PaperTradeExchange) StartFundingRateTimer(ctx context.Context) {
+	// Check every hour to see if 8h has elapsed since last funding
+	ticker := time.NewTicker(1 * time.Hour)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				e.applyFundingRate()
+			}
+		}
+	}()
 }
 
 // MarginBorrowed returns the current borrowed amount for a given asset.

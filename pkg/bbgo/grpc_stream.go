@@ -2,13 +2,15 @@ package bbgo
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
 	log "github.com/sirupsen/logrus"
-	"fmt"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 
 	"github.com/c9s/bbgo/pkg/pb"
 	"github.com/c9s/bbgo/pkg/types"
@@ -158,17 +160,58 @@ func (s *GRPCStream) receiveLoop(stream pb.MarketDataService_SubscribeClient) {
 }
 
 func (s *GRPCStream) reconnectLoop() {
+	backoff := 3 * time.Second
+	const maxBackoff = 30 * time.Second
+	const subscribeTimeout = 15 * time.Second
+
 	for {
 		if s.rootCtx.Err() != nil {
 			return
 		}
-		time.Sleep(3 * time.Second)
-		log.Info("attempting gRPC market data reconnect")
+		time.Sleep(backoff)
+		log.WithField("backoff", backoff).Info("attempting gRPC market data reconnect")
 
-		conn, err := grpc.NewClient(s.grpcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		conn, err := grpc.NewClient(s.grpcAddr,
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+			grpc.WithConnectParams(grpc.ConnectParams{MinConnectTimeout: subscribeTimeout}),
+		)
 		if err != nil {
 			log.WithError(err).Warn("gRPC reconnect dial failed, retrying")
+			backoff = backoff * 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
 			continue
+		}
+
+		// Pre-flight: verify the server is ready with a unary call before
+		// attempting a long-lived streaming Subscribe. This avoids creating
+		// a stream against a server that is still initialising (which causes
+		// "error reading server preface: EOF").
+		{
+			pfCtx, pfCancel := context.WithTimeout(s.rootCtx, 5*time.Second)
+			_, pfErr := pb.NewMarketDataServiceClient(conn).QueryKLines(pfCtx, &pb.QueryKLinesRequest{
+				Exchange: s.exchangeName,
+				Symbol:   "BTCUSDT",
+				Limit:    1,
+			})
+			pfCancel()
+			if pfErr != nil {
+				conn.Close()
+				// Only backoff on connectivity errors; a response (even an
+				// error like "symbol not found") means the server is ready.
+				if codes.Unavailable == status.Code(pfErr) {
+					log.WithError(pfErr).Debug("gRPC pre-flight check failed, server not ready")
+					backoff = backoff * 2
+					if backoff > maxBackoff {
+						backoff = maxBackoff
+					}
+					continue
+				}
+				// Non-Unavailable error means the server IS responding —
+				// fall through to Subscribe.
+				log.WithError(pfErr).Debug("gRPC pre-flight got non-fatal error, proceeding to subscribe")
+			}
 		}
 
 		subs := s.GetSubscriptions()
@@ -179,12 +222,19 @@ func (s *GRPCStream) reconnectLoop() {
 
 		streamCtx, streamCancel := context.WithCancel(s.rootCtx)
 		client := pb.NewMarketDataServiceClient(conn)
+
+		subCtx, subCancel := context.WithTimeout(streamCtx, subscribeTimeout)
 		req := &pb.SubscribeRequest{Subscriptions: pbSubs}
-		stream, err := client.Subscribe(streamCtx, req)
+		stream, err := client.Subscribe(subCtx, req)
+		subCancel()
 		if err != nil {
 			streamCancel()
 			conn.Close()
 			log.WithError(err).Warn("gRPC reconnect failed, retrying")
+			backoff = backoff * 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
 			continue
 		}
 
@@ -199,6 +249,7 @@ func (s *GRPCStream) reconnectLoop() {
 		s.mu.Unlock()
 
 		oldConn.Close()
+		log.Info("gRPC market data reconnected successfully")
 		s.EmitConnect()
 		go s.receiveLoop(stream)
 		return

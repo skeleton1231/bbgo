@@ -107,7 +107,7 @@ func (s *TradeService) Sync(
 	tasks := []SyncTask{
 		{
 			Type:   types.Trade{},
-			Select: SelectLastTrades(exchange.Name(), symbol, isMargin, isFutures, isIsolated, 100),
+			Select: SelectLastTrades(s.DB.DriverName(), exchange.Name(), symbol, isMargin, isFutures, isIsolated, 100),
 			OnLoad: func(objs interface{}) {
 				// update last trade ID
 				trades := objs.([]types.Trade)
@@ -570,7 +570,20 @@ func queryTradesSQL(options QueryTradesOptions) string {
 	return sql
 }
 
+// postgresTradeSelectColumns lists columns for the Supabase trades table with aliases
+// to match Go struct db tags. Supabase uses trade_id (not id) and has no inserted_at.
+var postgresTradeSelectColumns = []string{
+	"gid", "trade_id AS id", "order_id", "order_uuid",
+	"exchange", "price", "quantity", "quote_quantity",
+	"symbol", "side", "is_buyer", "is_maker", "traded_at",
+	"fee", "fee_currency", "is_margin", "is_futures", "is_isolated",
+	"strategy", "strategy_instance_id", "pnl", "position_action",
+}
+
 func genTradeSelectColumns(driver string) []string {
+	if driver == "postgres" {
+		return postgresTradeSelectColumns
+	}
 	if driver != "mysql" {
 		return []string{"*"}
 	}
@@ -611,17 +624,17 @@ func (s *TradeService) Insert(trade types.Trade) error {
 	switch s.DB.DriverName() {
 	case "mysql":
 		_, err := s.DB.NamedExec(`
-			INSERT INTO `+"`"+tableName+"`"+` (id, order_id, order_uuid, exchange, price, quantity, quote_quantity, symbol, side, is_buyer, is_maker, traded_at, fee, fee_currency, is_margin, is_futures, is_isolated, strategy, strategy_instance_id, pnl)
-			VALUES (:id, :order_id, IF(:order_uuid != '', UUID_TO_BIN(:order_uuid, true), ''), :exchange, :price, :quantity, :quote_quantity, :symbol, :side, :is_buyer, :is_maker, :traded_at, :fee, :fee_currency, :is_margin, :is_futures, :is_isolated, :strategy, :strategy_instance_id, :pnl)
+			INSERT INTO `+"`"+tableName+"`"+` (id, order_id, order_uuid, exchange, price, quantity, quote_quantity, symbol, side, is_buyer, is_maker, traded_at, fee, fee_currency, is_margin, is_futures, is_isolated, strategy, strategy_instance_id, pnl, position_action)
+			VALUES (:id, :order_id, IF(:order_uuid != '', UUID_TO_BIN(:order_uuid, true), ''), :exchange, :price, :quantity, :quote_quantity, :symbol, :side, :is_buyer, :is_maker, :traded_at, :fee, :fee_currency, :is_margin, :is_futures, :is_isolated, :strategy, :strategy_instance_id, :pnl, :position_action)
 			ON DUPLICATE KEY UPDATE id=:id, order_id=:order_id, order_uuid=:order_uuid, exchange=:exchange, price=:price, quantity=:quantity, quote_quantity=:quote_quantity, symbol=:symbol, side=:side, is_buyer=:is_buyer, is_maker=:is_maker, traded_at=:traded_at, fee=:fee, fee_currency=:fee_currency, is_margin=:is_margin, is_futures=:is_futures, is_isolated=:is_isolated, strategy=:strategy, pnl=:pnl;`,
 			trade)
 		return err
 
 	case "postgres":
 		_, err := s.DB.NamedExec(`
-			INSERT INTO "`+tableName+`" (trade_id, order_id, order_uuid, exchange, price, quantity, quote_quantity, symbol, side, is_buyer, is_maker, traded_at, fee, fee_currency, is_margin, is_futures, is_isolated, strategy, strategy_instance_id, pnl, user_id)
-			VALUES (:trade_id, :order_id, :order_uuid, :exchange, :price, :quantity, :quote_quantity, :symbol, :side, :is_buyer, :is_maker, :traded_at, :fee, :fee_currency, :is_margin, :is_futures, :is_isolated, :strategy, :strategy_instance_id, :pnl, :user_id)
-			ON CONFLICT (user_id, exchange, trade_id) DO UPDATE SET order_id=:order_id, order_uuid=:order_uuid, price=:price, quantity=:quantity, quote_quantity=:quote_quantity, symbol=:symbol, side=:side, is_buyer=:is_buyer, is_maker=:is_maker, traded_at=:traded_at, fee=:fee, fee_currency=:fee_currency, is_margin=:is_margin, is_futures=:is_futures, is_isolated=:is_isolated, strategy=:strategy, pnl=:pnl`,
+			INSERT INTO "`+tableName+`" (trade_id, order_id, order_uuid, exchange, price, quantity, quote_quantity, symbol, side, is_buyer, is_maker, traded_at, fee, fee_currency, is_margin, is_futures, is_isolated, strategy, strategy_instance_id, pnl, position_action, user_id)
+			VALUES (:trade_id, :order_id, :order_uuid, :exchange, :price, :quantity, :quote_quantity, :symbol, :side, :is_buyer, :is_maker, :traded_at, :fee, :fee_currency, :is_margin, :is_futures, :is_isolated, :strategy, :strategy_instance_id, :pnl, :position_action, :user_id)
+			ON CONFLICT (user_id, exchange, symbol, side, trade_id) DO UPDATE SET order_id=:order_id, order_uuid=:order_uuid, price=:price, quantity=:quantity, quote_quantity=:quote_quantity, symbol=:symbol, side=:side, is_buyer=:is_buyer, is_maker=:is_maker, traded_at=:traded_at, fee=:fee, fee_currency=:fee_currency, is_margin=:is_margin, is_futures=:is_futures, is_isolated=:is_isolated, strategy=:strategy, pnl=:pnl`,
 			map[string]interface{}{
 				"trade_id":             strconv.FormatUint(trade.ID, 10),
 				"order_id":             strconv.FormatUint(trade.OrderID, 10),
@@ -643,6 +656,7 @@ func (s *TradeService) Insert(trade types.Trade) error {
 				"strategy":             trade.StrategyID,
 				"strategy_instance_id": trade.StrategyInstanceID,
 				"pnl":                  trade.PnL,
+				"position_action":      trade.PositionAction,
 				"user_id":              s.UserID,
 			})
 		return err
@@ -678,8 +692,9 @@ func (s *TradeService) DeleteAll() error {
 	return err
 }
 
-func SelectLastTrades(ex types.ExchangeName, symbol string, isMargin, isFutures, isIsolated bool, limit uint64) sq.SelectBuilder {
-	return sq.Select("*").
+func SelectLastTrades(driver string, ex types.ExchangeName, symbol string, isMargin, isFutures, isIsolated bool, limit uint64) sq.SelectBuilder {
+	cols := genTradeSelectColumns(driver)
+	return sq.Select(cols...).
 		From("trades").
 		Where(sq.And{
 			sq.Eq{"symbol": symbol},

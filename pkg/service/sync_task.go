@@ -249,9 +249,21 @@ func detectLastestSelfTrade(ctx context.Context, db *sqlx.DB, sel SyncTask, reco
 		}
 	}
 	lastTradeId := strconv.FormatUint(latestTrade.ID, 10)
-	query := squirrel.Select("*").
-		From("trades").
-		Where(squirrel.Eq{"id": lastTradeId})
+
+	var query squirrel.SelectBuilder
+	if db.DriverName() == "postgres" {
+		query = squirrel.Select(
+			"gid", "trade_id AS id", "order_id", "order_uuid",
+			"exchange", "price", "quantity", "quote_quantity",
+			"symbol", "side", "is_buyer", "is_maker", "traded_at",
+			"fee", "fee_currency", "is_margin", "is_futures", "is_isolated",
+			"strategy", "strategy_instance_id", "pnl", "position_action",
+		).From("trades").Where(squirrel.Eq{"trade_id": lastTradeId})
+	} else {
+		query = squirrel.Select("*").
+			From("trades").
+			Where(squirrel.Eq{"id": lastTradeId})
+	}
 	sql, args, err := query.ToSql()
 	if err != nil {
 		logrus.Warnf("can not build sql for self-trade records: %s", err)

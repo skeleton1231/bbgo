@@ -28,6 +28,12 @@ func Test_genOrderSQL(t *testing.T) {
 		assert.Contains(t, sql, "FROM orders")
 	})
 
+	t.Run("postgres aliases order_uuid AS uuid", func(t *testing.T) {
+		o := QueryOrdersOptions{}
+		sql := genOrderSQL("postgres", "orders", o)
+		assert.Contains(t, sql, "orders.order_uuid AS uuid")
+	})
+
 	t.Run("prefixed table name", func(t *testing.T) {
 		o := QueryOrdersOptions{}
 		sql := genOrderSQL("postgres", "paper_orders", o)
