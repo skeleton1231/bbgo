@@ -281,7 +281,7 @@ func (s *OrderService) Insert(order types.Order) (err error) {
 		_, err = s.DB.NamedExec(`
 			INSERT INTO "`+tableName+`" (exchange, order_id, client_order_id, order_type, status, symbol, price, stop_price, quantity, executed_quantity, side, is_working, time_in_force, created_at, updated_at, is_margin, is_futures, is_isolated, order_uuid, actual_order_id, strategy_instance_id, user_id, position_action)
 			VALUES (:exchange, :order_id, :client_order_id, :order_type, :status, :symbol, :price, :stop_price, :quantity, :executed_quantity, :side, :is_working, :time_in_force, :created_at, :updated_at, :is_margin, :is_futures, :is_isolated, :order_uuid, :actual_order_id, :strategy_instance_id, :user_id, :position_action)
-			ON CONFLICT (user_id, order_id, exchange) DO UPDATE SET status=:status, executed_quantity=:executed_quantity, is_working=:is_working, updated_at=:updated_at, position_action=:position_action`,
+			ON CONFLICT (user_id, order_id, exchange) DO UPDATE SET status=:status, executed_quantity=:executed_quantity, is_working=:is_working, updated_at=:updated_at, position_action=:position_action, strategy_instance_id=:strategy_instance_id`,
 			map[string]interface{}{
 				"exchange":             order.Exchange,
 				"order_id":             strconv.FormatUint(order.OrderID, 10),

@@ -3,6 +3,7 @@ package bbgo
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -438,9 +439,10 @@ type PaperTradeExchange struct {
 	matchingBooks   map[string]*paperMatchingBook
 	mu              sync.Mutex
 	userDataEmitter types.StandardStreamEmitter
-	db              *sqlx.DB // nil when not in DB mode
-	tablePrefix     string
-	userID          string
+	db               *sqlx.DB // nil when not in DB mode
+	tablePrefix      string
+	userID           string
+	strategyInstance string // isolates per-container queries (open-order restore) in shared DB
 
 	// Futures state per symbol
 	futuresSettings types.FuturesSettings
@@ -514,6 +516,7 @@ func (e *PaperTradeExchange) SetDB(db *sqlx.DB, tablePrefix string, userID strin
 	e.db = db
 	e.tablePrefix = tablePrefix
 	e.userID = userID
+	e.strategyInstance = os.Getenv("BBGO_STRATEGY_INSTANCE_ID")
 }
 
 // EmitBalanceUpdateFromAccount emits a balance update using the current account state.
@@ -609,12 +612,19 @@ func (e *PaperTradeExchange) queryOpenOrders(ctx context.Context, symbol string)
 	if e.db.DriverName() == "postgres" {
 		query = `SELECT exchange, CAST(order_id AS BIGINT) as order_id, client_order_id, order_type, status, symbol, price, stop_price, quantity, executed_quantity, side, is_working, time_in_force, created_at, updated_at, is_margin, is_futures, is_isolated, order_uuid as uuid, actual_order_id, strategy_instance_id FROM "` + tableName + `" WHERE user_id = $1 AND status IN ('NEW', 'PARTIALLY_FILLED')`
 		args = append(args, e.userID)
+		// In multi-tenant shared tables, restrict to this container's own orders so
+		// restart-time restore does not pull in orders belonging to other strategies.
+		if e.strategyInstance != "" {
+			query += " AND strategy_instance_id = $2"
+			args = append(args, e.strategyInstance)
+		}
 	} else {
 		query = "SELECT * FROM " + tableName + " WHERE status IN ('NEW', 'PARTIALLY_FILLED')"
 	}
 	if symbol != "" {
 		if e.db.DriverName() == "postgres" {
-			query += " AND symbol = $2"
+			nextIdx := len(args) + 1
+			query += " AND symbol = $" + strconv.Itoa(nextIdx)
 		} else {
 			query += " AND symbol = ?"
 		}
