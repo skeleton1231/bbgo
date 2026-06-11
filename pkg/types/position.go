@@ -80,6 +80,9 @@ type Position struct {
 
 	AccumulatedProfit fixedpoint.Value `json:"accumulatedProfit,omitempty" db:"accumulated_profit"`
 
+	// LastPositionAction records the position action of the most recent trade applied to this position.
+	LastPositionAction string `json:"lastPositionAction,omitempty" db:"last_position_action"`
+
 	// closing is a flag for marking this position is closing
 	closing bool
 

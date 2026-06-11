@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
+	"github.com/c9s/bbgo/pkg/fixedpoint"
 	"github.com/c9s/bbgo/pkg/pb"
 	"github.com/c9s/bbgo/pkg/types"
 )
@@ -28,9 +29,9 @@ type GRPCStream struct {
 	mu            sync.Mutex
 	subscriptions []types.Subscription
 
-	rootCtx context.Context
-	rootCancel context.CancelFunc
-	streamCtx  context.Context
+	rootCtx      context.Context
+	rootCancel   context.CancelFunc
+	streamCtx    context.Context
 	streamCancel context.CancelFunc
 
 	// callbacks — mirrors StandardStream callback slices
@@ -53,11 +54,11 @@ type GRPCStream struct {
 func NewGRPCStream(conn *grpc.ClientConn, exchangeName string, grpcAddr string) *GRPCStream {
 	rootCtx, rootCancel := context.WithCancel(context.Background())
 	return &GRPCStream{
-		conn:       conn,
+		conn:         conn,
 		exchangeName: exchangeName,
-		grpcAddr:   grpcAddr,
-		rootCtx:    rootCtx,
-		rootCancel: rootCancel,
+		grpcAddr:     grpcAddr,
+		rootCtx:      rootCtx,
+		rootCancel:   rootCancel,
 	}
 }
 
@@ -197,11 +198,11 @@ func (s *GRPCStream) reconnectLoop() {
 			})
 			pfCancel()
 			if pfErr != nil {
-				conn.Close()
 				// Only backoff on connectivity errors; a response (even an
 				// error like "symbol not found") means the server is ready.
 				if codes.Unavailable == status.Code(pfErr) {
 					log.WithError(pfErr).Debug("gRPC pre-flight check failed, server not ready")
+					conn.Close()
 					backoff = backoff * 2
 					if backoff > maxBackoff {
 						backoff = maxBackoff
@@ -263,27 +264,27 @@ func (s *GRPCStream) dispatch(data *pb.MarketData) {
 			return
 		}
 		k := pb.PbKLineToTypes(data.Kline)
-			if k.Interval == "" {
-				ms := k.EndTime.Time().Sub(k.StartTime.Time()).Milliseconds()
-				switch {
-				case ms >= 57000 && ms <= 63000:
-					k.Interval = types.Interval1m
-				case ms >= 177000 && ms <= 183000:
-					k.Interval = types.Interval3m
-				case ms >= 297000 && ms <= 303000:
-					k.Interval = types.Interval5m
-				case ms >= 897000 && ms <= 903000:
-					k.Interval = types.Interval15m
-				case ms >= 1797000 && ms <= 1803000:
-					k.Interval = types.Interval30m
-				case ms >= 3570000 && ms <= 3630000:
-					k.Interval = types.Interval1h
-				case ms >= 14370000 && ms <= 14430000:
-					k.Interval = types.Interval4h
-				case ms >= 86340000 && ms <= 86460000:
-					k.Interval = types.Interval1d
-				}
+		if k.Interval == "" {
+			ms := k.EndTime.Time().Sub(k.StartTime.Time()).Milliseconds()
+			switch {
+			case ms >= 57000 && ms <= 63000:
+				k.Interval = types.Interval1m
+			case ms >= 177000 && ms <= 183000:
+				k.Interval = types.Interval3m
+			case ms >= 297000 && ms <= 303000:
+				k.Interval = types.Interval5m
+			case ms >= 897000 && ms <= 903000:
+				k.Interval = types.Interval15m
+			case ms >= 1797000 && ms <= 1803000:
+				k.Interval = types.Interval30m
+			case ms >= 3570000 && ms <= 3630000:
+				k.Interval = types.Interval1h
+			case ms >= 14370000 && ms <= 14430000:
+				k.Interval = types.Interval4h
+			case ms >= 86340000 && ms <= 86460000:
+				k.Interval = types.Interval1d
 			}
+		}
 		s.EmitKLine(k)
 		if k.Closed {
 			s.EmitKLineClosed(k)
@@ -306,48 +307,117 @@ func (s *GRPCStream) dispatch(data *pb.MarketData) {
 		} else {
 			s.EmitBookUpdate(book)
 		}
+
+	case pb.Channel_TICKER:
+		if data.Ticker == nil {
+			return
+		}
+		s.EmitBookTickerUpdate(types.BookTicker{
+			Symbol:   data.Ticker.Symbol,
+			Buy:      fixedpoint.NewFromFloat(data.Ticker.High),
+			Sell:     fixedpoint.NewFromFloat(data.Ticker.Low),
+			BuySize:  fixedpoint.NewFromFloat(data.Ticker.Open),
+			SellSize: fixedpoint.NewFromFloat(data.Ticker.Close),
+		})
 	}
 }
 
 // --- callback registration (mirrors StandardStream) ---
 
-func (s *GRPCStream) OnStart(cb func())      { s.startCallbacks = append(s.startCallbacks, cb) }
-func (s *GRPCStream) EmitStart()             { for _, cb := range s.startCallbacks { cb() } }
+func (s *GRPCStream) OnStart(cb func()) { s.startCallbacks = append(s.startCallbacks, cb) }
+func (s *GRPCStream) EmitStart() {
+	for _, cb := range s.startCallbacks {
+		cb()
+	}
+}
 
-func (s *GRPCStream) OnConnect(cb func())    { s.connectCallbacks = append(s.connectCallbacks, cb) }
-func (s *GRPCStream) EmitConnect()           { for _, cb := range s.connectCallbacks { cb() } }
+func (s *GRPCStream) OnConnect(cb func()) { s.connectCallbacks = append(s.connectCallbacks, cb) }
+func (s *GRPCStream) EmitConnect() {
+	for _, cb := range s.connectCallbacks {
+		cb()
+	}
+}
 
-func (s *GRPCStream) OnDisconnect(cb func()) { s.disconnectCallbacks = append(s.disconnectCallbacks, cb) }
-func (s *GRPCStream) EmitDisconnect()        { for _, cb := range s.disconnectCallbacks { cb() } }
+func (s *GRPCStream) OnDisconnect(cb func()) {
+	s.disconnectCallbacks = append(s.disconnectCallbacks, cb)
+}
+func (s *GRPCStream) EmitDisconnect() {
+	for _, cb := range s.disconnectCallbacks {
+		cb()
+	}
+}
 
 func (s *GRPCStream) OnAuth(cb func()) { s.authCallbacks = append(s.authCallbacks, cb) }
 
-func (s *GRPCStream) OnKLine(cb func(types.KLine))       { s.kLineCallbacks = append(s.kLineCallbacks, cb) }
-func (s *GRPCStream) EmitKLine(k types.KLine)            { for _, cb := range s.kLineCallbacks { cb(k) } }
+func (s *GRPCStream) OnKLine(cb func(types.KLine)) { s.kLineCallbacks = append(s.kLineCallbacks, cb) }
+func (s *GRPCStream) EmitKLine(k types.KLine) {
+	for _, cb := range s.kLineCallbacks {
+		cb(k)
+	}
+}
 
-func (s *GRPCStream) OnKLineClosed(cb func(types.KLine)) { s.kLineClosedCallbacks = append(s.kLineClosedCallbacks, cb) }
-func (s *GRPCStream) EmitKLineClosed(k types.KLine)      { for _, cb := range s.kLineClosedCallbacks { cb(k) } }
+func (s *GRPCStream) OnKLineClosed(cb func(types.KLine)) {
+	s.kLineClosedCallbacks = append(s.kLineClosedCallbacks, cb)
+}
+func (s *GRPCStream) EmitKLineClosed(k types.KLine) {
+	for _, cb := range s.kLineClosedCallbacks {
+		cb(k)
+	}
+}
 
-func (s *GRPCStream) OnMarketTrade(cb func(types.Trade))  { s.marketTradeCallbacks = append(s.marketTradeCallbacks, cb) }
-func (s *GRPCStream) EmitMarketTrade(t types.Trade)       { for _, cb := range s.marketTradeCallbacks { cb(t) } }
+func (s *GRPCStream) OnMarketTrade(cb func(types.Trade)) {
+	s.marketTradeCallbacks = append(s.marketTradeCallbacks, cb)
+}
+func (s *GRPCStream) EmitMarketTrade(t types.Trade) {
+	for _, cb := range s.marketTradeCallbacks {
+		cb(t)
+	}
+}
 
-func (s *GRPCStream) OnBookUpdate(cb func(types.SliceOrderBook))   { s.bookUpdateCallbacks = append(s.bookUpdateCallbacks, cb) }
-func (s *GRPCStream) EmitBookUpdate(b types.SliceOrderBook)        { for _, cb := range s.bookUpdateCallbacks { cb(b) } }
+func (s *GRPCStream) OnBookUpdate(cb func(types.SliceOrderBook)) {
+	s.bookUpdateCallbacks = append(s.bookUpdateCallbacks, cb)
+}
+func (s *GRPCStream) EmitBookUpdate(b types.SliceOrderBook) {
+	for _, cb := range s.bookUpdateCallbacks {
+		cb(b)
+	}
+}
 
-func (s *GRPCStream) OnBookSnapshot(cb func(types.SliceOrderBook)) { s.bookSnapshotCallbacks = append(s.bookSnapshotCallbacks, cb) }
-func (s *GRPCStream) EmitBookSnapshot(b types.SliceOrderBook)      { for _, cb := range s.bookSnapshotCallbacks { cb(b) } }
+func (s *GRPCStream) OnBookSnapshot(cb func(types.SliceOrderBook)) {
+	s.bookSnapshotCallbacks = append(s.bookSnapshotCallbacks, cb)
+}
+func (s *GRPCStream) EmitBookSnapshot(b types.SliceOrderBook) {
+	for _, cb := range s.bookSnapshotCallbacks {
+		cb(b)
+	}
+}
 
-func (s *GRPCStream) OnBookTickerUpdate(cb func(types.BookTicker)) { s.bookTickerCallbacks = append(s.bookTickerCallbacks, cb) }
+func (s *GRPCStream) OnBookTickerUpdate(cb func(types.BookTicker)) {
+	s.bookTickerCallbacks = append(s.bookTickerCallbacks, cb)
+}
+func (s *GRPCStream) EmitBookTickerUpdate(t types.BookTicker) {
+	for _, cb := range s.bookTickerCallbacks {
+		cb(t)
+	}
+}
 
 func (s *GRPCStream) OnRawMessage(cb func(raw []byte)) {}
 
-func (s *GRPCStream) OnTradeUpdate(cb func(types.Trade))       { s.tradeUpdateCallbacks = append(s.tradeUpdateCallbacks, cb) }
-func (s *GRPCStream) OnOrderUpdate(cb func(types.Order))       { s.orderUpdateCallbacks = append(s.orderUpdateCallbacks, cb) }
-func (s *GRPCStream) OnBalanceSnapshot(cb func(types.BalanceMap)) { s.balanceSnapshotCallbacks = append(s.balanceSnapshotCallbacks, cb) }
-func (s *GRPCStream) OnBalanceUpdate(cb func(types.BalanceMap))   { s.balanceUpdateCallbacks = append(s.balanceUpdateCallbacks, cb) }
+func (s *GRPCStream) OnTradeUpdate(cb func(types.Trade)) {
+	s.tradeUpdateCallbacks = append(s.tradeUpdateCallbacks, cb)
+}
+func (s *GRPCStream) OnOrderUpdate(cb func(types.Order)) {
+	s.orderUpdateCallbacks = append(s.orderUpdateCallbacks, cb)
+}
+func (s *GRPCStream) OnBalanceSnapshot(cb func(types.BalanceMap)) {
+	s.balanceSnapshotCallbacks = append(s.balanceSnapshotCallbacks, cb)
+}
+func (s *GRPCStream) OnBalanceUpdate(cb func(types.BalanceMap)) {
+	s.balanceUpdateCallbacks = append(s.balanceUpdateCallbacks, cb)
+}
 
-func (s *GRPCStream) OnAggTrade(cb func(types.Trade))               {}
-func (s *GRPCStream) OnForceOrder(cb func(types.LiquidationInfo))    {}
+func (s *GRPCStream) OnAggTrade(cb func(types.Trade))                             {}
+func (s *GRPCStream) OnForceOrder(cb func(types.LiquidationInfo))                 {}
 func (s *GRPCStream) OnFuturesPositionUpdate(cb func(types.FuturesPositionMap))   {}
 func (s *GRPCStream) OnFuturesPositionSnapshot(cb func(types.FuturesPositionMap)) {}
 

@@ -191,6 +191,10 @@ type SubmitOrder struct {
 
 	// Tag is an optional strategy-level label (e.g. "close") — NOT used for strategy instance identification.
 	Tag string `json:"tag,omitempty" db:"-"`
+
+	// PositionAction is the intended position action for this order.
+	// Set by the order executor based on current position state and order side.
+	PositionAction string `json:"positionAction,omitempty" db:"position_action"`
 }
 
 // AsOrder converts SubmitOrder to Order

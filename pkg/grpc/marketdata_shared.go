@@ -121,7 +121,7 @@ func (b *SharedBroadcaster) ensureStream() {
 			for key := range b.subs {
 				found := false
 				for _, existing := range all {
-					if string(existing.Channel) == key.channel && existing.Symbol == key.symbol {
+					if string(existing.Channel) == key.channel && existing.Symbol == key.symbol && string(existing.Options.Interval) == key.interval && string(existing.Options.Depth) == key.depth {
 						found = true
 						break
 					}
@@ -158,6 +158,23 @@ func (b *SharedBroadcaster) bindCallbacks(stream types.Stream) {
 	})
 	stream.OnBookUpdate(func(book types.SliceOrderBook) {
 		b.broadcast(transBook(session, book, pb.Event_UPDATE))
+	})
+	stream.OnBookTickerUpdate(func(ticker types.BookTicker) {
+		b.broadcast(&pb.MarketData{
+			Session:  session.Name,
+			Exchange: session.ExchangeName.String(),
+			Symbol:   ticker.Symbol,
+			Channel:  pb.Channel_TICKER,
+			Event:    pb.Event_UPDATE,
+			Ticker: &pb.Ticker{
+				Exchange: session.ExchangeName.String(),
+				Symbol:   ticker.Symbol,
+				High:     ticker.Buy.Float64(),
+				Low:      ticker.Sell.Float64(),
+				Open:     ticker.BuySize.Float64(),
+				Close:    ticker.SellSize.Float64(),
+			},
+		})
 	})
 }
 

@@ -578,6 +578,7 @@ func TestPaperTradeExchange_KlineFill_TracksFuturesPosition(t *testing.T) {
 func TestPaperTradeExchange_KlineFill_ShortSell(t *testing.T) {
 	e := newTestPaperTradeExchange()
 	e.UseFutures()
+	e.SetLeverage(context.Background(), "BTCUSDT", 20)
 
 	// Place a limit sell (short) — should succeed without holding BTC
 	_, err := e.SubmitOrder(context.Background(), types.SubmitOrder{

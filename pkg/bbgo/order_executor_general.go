@@ -396,6 +396,9 @@ func (e *GeneralOrderExecutor) NewOrderFromOpenPosition(
 
 		submitOrder.Side = types.SideTypeBuy
 		submitOrder.Quantity = quantity
+		submitOrder.PositionAction = types.ComputePositionActionFromState(
+			e.position.GetBase(), types.SideTypeBuy, quantity, e.session.Futures,
+		)
 
 		return &submitOrder, nil
 	} else if options.Short {
@@ -419,6 +422,9 @@ func (e *GeneralOrderExecutor) NewOrderFromOpenPosition(
 
 		submitOrder.Side = types.SideTypeSell
 		submitOrder.Quantity = quantity
+		submitOrder.PositionAction = types.ComputePositionActionFromState(
+			e.position.GetBase(), types.SideTypeSell, quantity, e.session.Futures,
+		)
 
 		return &submitOrder, nil
 	}
@@ -538,6 +544,10 @@ func (e *GeneralOrderExecutor) ClosePosition(ctx context.Context, percentage fix
 			}
 		}
 	}
+
+	submitOrder.PositionAction = types.ComputePositionActionFromState(
+		e.position.GetBase(), submitOrder.Side, submitOrder.Quantity, e.session.Futures,
+	)
 
 	tagStr := strings.Join(tags, ",")
 	submitOrder.Tag = tagStr

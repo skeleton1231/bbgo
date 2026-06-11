@@ -305,7 +305,9 @@ func (c *TradeCollector) applyTrade(trade types.Trade) (*types.Profit, bool) {
 	}
 
 	if c.position != nil {
+		trade.PositionAction = c.position.ComputePositionAction(trade)
 		profit, netProfit, madeProfit := c.position.AddTrade(trade)
+		c.position.LastPositionAction = trade.PositionAction
 		c.EmitTrade(trade, profit, netProfit)
 		if madeProfit {
 			p := c.position.NewProfit(trade, profit, netProfit)

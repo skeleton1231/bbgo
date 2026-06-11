@@ -36,8 +36,12 @@ const paperTradeFeeRate = 0.001
 
 // isPaperLimitTaker checks if a limit order would immediately match on a real exchange.
 // Buy limit at or above market price, or sell limit at or below market price → taker.
+func isLimitType(t types.OrderType) bool {
+	return t == types.OrderTypeLimit || t == types.OrderTypeLimitMaker
+}
+
 func isPaperLimitTaker(o types.SubmitOrder, currentPrice fixedpoint.Value) bool {
-	if currentPrice.IsZero() || o.Type != types.OrderTypeLimit {
+	if currentPrice.IsZero() || !isLimitType(o.Type) {
 		return false
 	}
 	return (o.Side == types.SideTypeBuy && o.Price.Compare(currentPrice) >= 0) ||
@@ -175,7 +179,7 @@ func (m *paperMatchingBook) buyToPrice(price fixedpoint.Value) []paperFill {
 	var fills []paperFill
 	var remainingAsk []types.Order
 	for _, o := range m.askOrders {
-		if o.Type == types.OrderTypeLimit && price.Compare(o.Price) >= 0 {
+		if isLimitType(o.Type) && price.Compare(o.Price) >= 0 {
 			fillPrice := o.Price
 			if o.Price.Compare(m.lastPrice) < 0 {
 				fillPrice = m.lastPrice
@@ -198,7 +202,7 @@ func (m *paperMatchingBook) sellToPrice(price fixedpoint.Value) []paperFill {
 	var fills []paperFill
 	var remainingBid []types.Order
 	for _, o := range m.bidOrders {
-		if o.Type == types.OrderTypeLimit && price.Compare(o.Price) <= 0 {
+		if isLimitType(o.Type) && price.Compare(o.Price) <= 0 {
 			fillPrice := o.Price
 			if o.Price.Compare(m.lastPrice) > 0 {
 				fillPrice = m.lastPrice
@@ -299,22 +303,22 @@ func (m *paperMatchingBook) buildFillLocked(order types.Order, fillPrice fixedpo
 	}
 
 	trade := types.Trade{
-		ID:                nextPaperTradeID(),
-		OrderID:           order.OrderID,
-		Exchange:          order.Exchange,
-		Symbol:            order.Symbol,
-		Side:              order.Side,
-		Price:             fillPrice,
-		Quantity:          order.Quantity,
-		QuoteQuantity:     quoteQty,
-		IsBuyer:           order.Side == types.SideTypeBuy,
-		IsMaker:           true,
-		Fee:               fee,
-		FeeCurrency:       m.Market.QuoteCurrency,
+		ID:                 nextPaperTradeID(),
+		OrderID:            order.OrderID,
+		Exchange:           order.Exchange,
+		Symbol:             order.Symbol,
+		Side:               order.Side,
+		Price:              fillPrice,
+		Quantity:           order.Quantity,
+		QuoteQuantity:      quoteQty,
+		IsBuyer:            order.Side == types.SideTypeBuy,
+		IsMaker:            true,
+		Fee:                fee,
+		FeeCurrency:        m.Market.QuoteCurrency,
 		StrategyInstanceID: order.StrategyInstanceID,
-		Time:              now,
-		IsFutures:         isFutures,
-		IsMargin:          isMargin,
+		Time:               now,
+		IsFutures:          isFutures,
+		IsMargin:           isMargin,
 	}
 
 	switch order.Side {
@@ -431,12 +435,12 @@ type PaperTradeExchange struct {
 
 	account *types.Account
 
-	matchingBooks    map[string]*paperMatchingBook
-	mu               sync.Mutex
-	userDataEmitter  types.StandardStreamEmitter
-	db               *sqlx.DB // nil when not in DB mode
-	tablePrefix      string
-	userID           string
+	matchingBooks   map[string]*paperMatchingBook
+	mu              sync.Mutex
+	userDataEmitter types.StandardStreamEmitter
+	db              *sqlx.DB // nil when not in DB mode
+	tablePrefix     string
+	userID          string
 
 	// Futures state per symbol
 	futuresSettings types.FuturesSettings
@@ -459,12 +463,12 @@ func NewPaperTradeExchange(inner types.Exchange, markets types.MarketMap, balanc
 	account.UpdateBalances(balances)
 
 	e := &PaperTradeExchange{
-		inner:          inner,
-		markets:        markets,
-		account:        account,
-		matchingBooks:  make(map[string]*paperMatchingBook),
-		futuresStates:  make(map[string]*paperFuturesState),
-		marginStates:   make(map[string]*paperMarginState),
+		inner:         inner,
+		markets:       markets,
+		account:       account,
+		matchingBooks: make(map[string]*paperMatchingBook),
+		futuresStates: make(map[string]*paperFuturesState),
+		marginStates:  make(map[string]*paperMarginState),
 	}
 
 	for symbol, market := range markets {
@@ -699,13 +703,13 @@ func (e *PaperTradeExchange) restoreFuturesPositions(ctx context.Context) error 
 	var restored int
 	for rows.Next() {
 		var r struct {
-			Symbol             string          `db:"symbol"`
-			PositionSide       string          `db:"position_side"`
+			Symbol             string           `db:"symbol"`
+			PositionSide       string           `db:"position_side"`
 			Leverage           fixedpoint.Value `db:"leverage"`
 			EntryPrice         fixedpoint.Value `db:"entry_price"`
 			PositionAmount     fixedpoint.Value `db:"position_amount"`
-			MarginAsset        string          `db:"margin_asset"`
-			StrategyInstanceID string          `db:"strategy_instance_id"`
+			MarginAsset        string           `db:"margin_asset"`
+			StrategyInstanceID string           `db:"strategy_instance_id"`
 		}
 		if err := rows.StructScan(&r); err != nil {
 			return fmt.Errorf("scan futures position: %w", err)
@@ -903,9 +907,13 @@ func (e *PaperTradeExchange) SubmitOrder(ctx context.Context, submit types.Submi
 			lockAmt := submit.Quantity.Mul(price).Div(leverage)
 			baseBal, _ := e.account.Balance(market.BaseCurrency)
 			if baseBal.Available.Compare(submit.Quantity) >= 0 {
-				_ = e.account.LockBalance(market.BaseCurrency, submit.Quantity)
+				if err := e.account.LockBalance(market.BaseCurrency, submit.Quantity); err != nil {
+					return nil, fmt.Errorf("paper trade: %w", err)
+				}
 			} else if lockAmt.Sign() > 0 {
-				_ = e.account.LockBalance(market.QuoteCurrency, lockAmt)
+				if err := e.account.LockBalance(market.QuoteCurrency, lockAmt); err != nil {
+					return nil, fmt.Errorf("paper trade: %w", err)
+				}
 			}
 		} else {
 			if err := e.account.LockBalance(market.BaseCurrency, submit.Quantity); err != nil {

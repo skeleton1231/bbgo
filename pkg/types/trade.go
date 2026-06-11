@@ -110,6 +110,13 @@ type Trade struct {
 
 	InsertedAt *Time `json:"insertedAt" db:"inserted_at"`
 
+	// PositionAction describes the position action of this trade.
+	// Spot values: OPEN, ADD, REDUCE, CLOSE
+	// Futures values: OPEN_LONG, ADD_LONG, REDUCE_LONG, CLOSE_LONG,
+	//   OPEN_SHORT, ADD_SHORT, REDUCE_SHORT, CLOSE_SHORT,
+	//   FLIP_LONG_TO_SHORT, FLIP_SHORT_TO_LONG
+	PositionAction string `json:"positionAction,omitempty" db:"position_action"`
+
 	Tag string `json:"tags" db:"-"`
 }
 

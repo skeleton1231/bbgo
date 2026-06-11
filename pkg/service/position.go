@@ -68,6 +68,8 @@ func (s *PositionService) Insert(
 		"exchange":             trade.Exchange,
 		"side":                 trade.Side,
 		"traded_at":            trade.Time,
+		"position_action":      trade.PositionAction,
+		"last_position_action": position.LastPositionAction,
 	}
 
 	var sql string
@@ -75,18 +77,18 @@ func (s *PositionService) Insert(
 	case "postgres":
 		sql = `INSERT INTO "` + tableName + `" (
 			strategy, strategy_instance_id, symbol, quote_currency, base_currency, average_cost,
-			base, quote, profit, net_profit, trade_id, exchange, side, traded_at, user_id
+			base, quote, profit, net_profit, trade_id, exchange, side, traded_at, user_id, position_action, last_position_action
 		) VALUES (
 			:strategy, :strategy_instance_id, :symbol, :quote_currency, :base_currency, :average_cost,
-			:base, :quote, :profit, :net_profit, :trade_id, :exchange, :side, :traded_at, :user_id
+			:base, :quote, :profit, :net_profit, :trade_id, :exchange, :side, :traded_at, :user_id, :position_action, :last_position_action
 		) ON CONFLICT (user_id, trade_id, side, symbol, exchange) DO NOTHING`
 	default: // mysql, sqlite3
 		sql = `INSERT OR IGNORE INTO ` + tableName + ` (
 			strategy, strategy_instance_id, symbol, quote_currency, base_currency, average_cost,
-			base, quote, profit, net_profit, trade_id, exchange, side, traded_at
+			base, quote, profit, net_profit, trade_id, exchange, side, traded_at, position_action, last_position_action
 		) VALUES (
 			:strategy, :strategy_instance_id, :symbol, :quote_currency, :base_currency, :average_cost,
-			:base, :quote, :profit, :net_profit, :trade_id, :exchange, :side, :traded_at
+			:base, :quote, :profit, :net_profit, :trade_id, :exchange, :side, :traded_at, :position_action, :last_position_action
 		)`
 	}
 

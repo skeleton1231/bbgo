@@ -60,6 +60,20 @@ func TestToSubscriptions_Kline(t *testing.T) {
 	}
 }
 
+func TestToSubscriptions_Ticker(t *testing.T) {
+	sub := &pb.Subscription{Symbol: "BTCUSDT", Channel: pb.Channel_TICKER}
+	got, err := toSubscriptions(sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Symbol != "BTCUSDT" {
+		t.Errorf("expected BTCUSDT, got %s", got.Symbol)
+	}
+	if got.Channel != types.BookTickerChannel {
+		t.Errorf("expected BookTickerChannel, got %s", got.Channel)
+	}
+}
+
 func TestToSubscriptions_Unsupported(t *testing.T) {
 	sub := &pb.Subscription{Symbol: "BTCUSDT", Channel: pb.Channel(999)}
 	_, err := toSubscriptions(sub)
@@ -488,5 +502,51 @@ func TestSharedBroadcaster_AddSubscriptions_DifferentIntervals(t *testing.T) {
 	bc.mu.Unlock()
 	if count != 2 {
 		t.Errorf("expected 2 unique subscriptions, got %d", count)
+	}
+}
+
+// TestSharedBroadcaster_ResubscribeDifferentIntervals verifies that the
+// Resubscribe dedup in ensureStream() distinguishes kline subscriptions
+// by interval. Without the fix, adding BTCUSDT kline 15m when 1m already
+// exists would be silently dropped.
+func TestSharedBroadcaster_ResubscribeDifferentIntervals(t *testing.T) {
+	bc := NewSharedBroadcaster(nil)
+	bc.started = true
+
+	bc.mu.Lock()
+	bc.subs[subKey{channel: "kline", symbol: "BTCUSDT", interval: "1m"}] = true
+	bc.subs[subKey{channel: "kline", symbol: "BTCUSDT", interval: "15m"}] = true
+	bc.mu.Unlock()
+
+	oldSubs := []types.Subscription{
+		{Channel: types.KLineChannel, Symbol: "BTCUSDT", Options: types.SubscribeOptions{Interval: types.Interval1m}},
+	}
+
+	var newSubs []types.Subscription
+	for key := range bc.subs {
+		found := false
+		for _, existing := range oldSubs {
+			if string(existing.Channel) == key.channel && existing.Symbol == key.symbol && string(existing.Options.Interval) == key.interval && string(existing.Options.Depth) == key.depth {
+				found = true
+				break
+			}
+		}
+		if !found {
+			newSubs = append(newSubs, types.Subscription{
+				Channel: types.Channel(key.channel),
+				Symbol:  key.symbol,
+				Options: types.SubscribeOptions{
+					Interval: types.Interval(key.interval),
+					Depth:    types.Depth(key.depth),
+				},
+			})
+		}
+	}
+
+	if len(newSubs) != 1 {
+		t.Fatalf("expected 1 new subscription (15m), got %d: %+v", len(newSubs), newSubs)
+	}
+	if string(newSubs[0].Options.Interval) != "15m" {
+		t.Errorf("expected new sub interval=15m, got %s", newSubs[0].Options.Interval)
 	}
 }

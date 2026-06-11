@@ -37,6 +37,12 @@ func toSubscriptions(sub *pb.Subscription) (types.Subscription, error) {
 				Interval: types.Interval(sub.Interval),
 			},
 		}, nil
+
+	case pb.Channel_TICKER:
+		return types.Subscription{
+			Symbol:  sub.Symbol,
+			Channel: types.BookTickerChannel,
+		}, nil
 	}
 
 	return types.Subscription{}, fmt.Errorf("unsupported subscription channel: %s", sub.Channel)

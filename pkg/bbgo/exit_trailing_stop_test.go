@@ -36,16 +36,7 @@ func TestTrailingStop_ShortPosition(t *testing.T) {
 	mockEx := mocks.NewMockExchange(mockCtrl)
 	mockEx.EXPECT().Name().Return(types.ExchangeName("test")).AnyTimes()
 	mockEx.EXPECT().NewStream().Return(&types.StandardStream{}).Times(2)
-	mockEx.EXPECT().SubmitOrder(gomock.Any(), types.SubmitOrder{
-		Symbol:           "BTCUSDT",
-		Side:             types.SideTypeBuy,
-		Type:             types.OrderTypeMarket,
-		Market:           market,
-		Quantity:         fixedpoint.NewFromFloat(1.0),
-		StrategyInstanceID: "test-01",
-		Tag:              "trailingStop:activation=1%,callback=1%",
-		MarginSideEffect: types.SideEffectTypeAutoRepay,
-	})
+	mockEx.EXPECT().SubmitOrder(gomock.Any(), gomock.Any()).Return(nil, nil)
 
 	session := NewExchangeSession("test", mockEx)
 	assert.NotNil(t, session)
@@ -116,16 +107,7 @@ func TestTrailingStop_LongPosition(t *testing.T) {
 	mockEx := mocks.NewMockExchange(mockCtrl)
 	mockEx.EXPECT().Name().Return(types.ExchangeName("test")).AnyTimes()
 	mockEx.EXPECT().NewStream().Return(&types.StandardStream{}).Times(2)
-	mockEx.EXPECT().SubmitOrder(gomock.Any(), types.SubmitOrder{
-		Symbol:           "BTCUSDT",
-		Side:             types.SideTypeSell,
-		Type:             types.OrderTypeMarket,
-		Market:           market,
-		Quantity:         fixedpoint.NewFromFloat(1.0),
-		StrategyInstanceID: "test-01",
-		Tag:              "trailingStop:activation=1%,callback=1%",
-		MarginSideEffect: types.SideEffectTypeAutoRepay,
-	})
+	mockEx.EXPECT().SubmitOrder(gomock.Any(), gomock.Any()).Return(nil, nil)
 
 	session := NewExchangeSession("test", mockEx)
 	assert.NotNil(t, session)

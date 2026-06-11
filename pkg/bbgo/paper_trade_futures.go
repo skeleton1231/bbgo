@@ -209,9 +209,10 @@ type maintMarginTier struct {
 	Rate        fixedpoint.Value // maintenance margin rate for this tier
 }
 
-// binanceBTCMaintenanceTiers approximates Binance BTCUSDT perpetual maintenance margin tiers.
-// Smaller positions use 0.4%, larger positions use progressively higher rates.
-var binanceBTCMaintenanceTiers = []maintMarginTier{
+// defaultMaintenanceTiers approximates Binance perpetual maintenance margin tiers.
+// These are based on BTCUSDT tiers; other symbols may have different schedules.
+// For paper trading simulation this is an acceptable approximation.
+var defaultMaintenanceTiers = []maintMarginTier{
 	{NotionalCap: fixedpoint.MustNewFromString("50000"), Rate: fixedpoint.MustNewFromString("0.004")},
 	{NotionalCap: fixedpoint.MustNewFromString("250000"), Rate: fixedpoint.MustNewFromString("0.005")},
 	{NotionalCap: fixedpoint.MustNewFromString("1000000"), Rate: fixedpoint.MustNewFromString("0.01")},
@@ -222,12 +223,12 @@ var binanceBTCMaintenanceTiers = []maintMarginTier{
 
 // getMaintenanceMarginRate returns the effective maintenance margin rate based on notional value.
 func getMaintenanceMarginRate(notional fixedpoint.Value) fixedpoint.Value {
-	for _, tier := range binanceBTCMaintenanceTiers {
+	for _, tier := range defaultMaintenanceTiers {
 		if tier.NotionalCap.IsZero() || notional.Compare(tier.NotionalCap) <= 0 {
 			return tier.Rate
 		}
 	}
-	return binanceBTCMaintenanceTiers[len(binanceBTCMaintenanceTiers)-1].Rate
+	return defaultMaintenanceTiers[len(defaultMaintenanceTiers)-1].Rate
 }
 
 // computePositionRiskLocked calculates simulated position risk from current state.
@@ -245,15 +246,15 @@ func (e *PaperTradeExchange) computePositionRiskLocked(symbol string) types.Posi
 	// Closed position: return minimal risk so FuturesService updates DB to amount=0
 	if state.PositionAmount.IsZero() {
 		return types.PositionRisk{
-			Exchange:       e.inner.Name(),
-			Symbol:         symbol,
-			PositionSide:   state.PositionSide,
-			EntryPrice:     state.EntryPrice,
-			Leverage:       fixedpoint.NewFromInt(int64(state.Leverage)),
-			MarginAsset:    state.MarginAsset,
-			PositionAmount: fixedpoint.Zero,
-			UpdateTime:             types.MillisecondTimestamp(time.Now()),
-			StrategyInstanceID:     state.StrategyInstanceID,
+			Exchange:           e.inner.Name(),
+			Symbol:             symbol,
+			PositionSide:       state.PositionSide,
+			EntryPrice:         state.EntryPrice,
+			Leverage:           fixedpoint.NewFromInt(int64(state.Leverage)),
+			MarginAsset:        state.MarginAsset,
+			PositionAmount:     fixedpoint.Zero,
+			UpdateTime:         types.MillisecondTimestamp(time.Now()),
+			StrategyInstanceID: state.StrategyInstanceID,
 		}
 	}
 
@@ -315,7 +316,6 @@ func (e *PaperTradeExchange) computePositionRiskLocked(symbol string) types.Posi
 		StrategyInstanceID:     state.StrategyInstanceID,
 	}
 }
-
 
 // updateFuturesPositionLocked updates the futures state after a fill.
 // Must be called with e.mu held (caller acquires it around this call).
@@ -391,6 +391,7 @@ func (e *PaperTradeExchange) updateFuturesPositionLocked(symbol string, side typ
 	}
 
 }
+
 // updateMarginInterest accrues simulated interest on borrowed assets.
 func (e *PaperTradeExchange) updateMarginInterest() {
 	e.mu.Lock()
