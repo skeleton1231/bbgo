@@ -207,7 +207,7 @@ The paper trade engine (`pkg/bbgo/paper_trade_exchange.go` + `paper_trade_future
 - Short selling allowed without holding base currency; margin locked instead of full notional (`notional / leverage`)
 - Position tracking: `paperFuturesState` per symbol — weighted average entry price, position amount (positive=long, negative=short), flip detection (long→short, short→long)
 - `QueryPositionRisk()` computes unrealized PnL, liquidation price, initial/maintenance margin, notional value
-- `SyncPositionRisksToDB()` writes to `paper_futures_position_risks` table every 30s via background goroutine
+- Position risk persistence: trade-event driven via `environment.go` `OnTradeUpdate` callback (only registered when config `userDataStream.futuresPosition: true`, which SaaS manager auto-sets when any session has `Futures=true`). Each futures trade triggers `FuturesService.QueryPositionsAndInsert` → `paper_futures_position_risks`. `PositionRiskUpdateInterval` throttles repeated writes for the same symbol. No background ticker.
 - Liquidation price formula: Long = entry × (1 - 1/leverage + maintRate), Short = entry × (1 + 1/leverage - maintRate)
 - Maintenance margin rate: 0.5% (`defaultMaintMarginRate`)
 
