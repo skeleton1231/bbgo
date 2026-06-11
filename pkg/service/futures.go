@@ -108,7 +108,7 @@ func (s *FuturesService) Query(options QueryFuturesPositionRiskOptions) ([]types
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.DB.NamedQuery(sql, args)
+	rows, err := s.DB.Queryx(s.DB.Rebind(sql), args...)
 	if err != nil {
 		return nil, err
 	}

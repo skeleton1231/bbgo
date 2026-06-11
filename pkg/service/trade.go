@@ -449,10 +449,7 @@ func (s *TradeService) Query(options QueryTradesOptions) ([]types.Trade, error) 
 		return nil, err
 	}
 
-	log.Debug(sql)
-	log.Debug(args)
-
-	rows, err := s.DB.Queryx(sql, args...)
+	rows, err := s.DB.Queryx(s.DB.Rebind(sql), args...)
 	if err != nil {
 		return nil, err
 	}

@@ -163,7 +163,7 @@ func (s *GRPCStream) receiveLoop(stream pb.MarketDataService_SubscribeClient) {
 func (s *GRPCStream) reconnectLoop() {
 	backoff := 3 * time.Second
 	const maxBackoff = 30 * time.Second
-	const subscribeTimeout = 15 * time.Second
+	const connectTimeout = 15 * time.Second
 
 	for {
 		if s.rootCtx.Err() != nil {
@@ -174,7 +174,7 @@ func (s *GRPCStream) reconnectLoop() {
 
 		conn, err := grpc.NewClient(s.grpcAddr,
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
-			grpc.WithConnectParams(grpc.ConnectParams{MinConnectTimeout: subscribeTimeout}),
+			grpc.WithConnectParams(grpc.ConnectParams{MinConnectTimeout: connectTimeout}),
 		)
 		if err != nil {
 			log.WithError(err).Warn("gRPC reconnect dial failed, retrying")
@@ -221,13 +221,17 @@ func (s *GRPCStream) reconnectLoop() {
 			pbSubs = append(pbSubs, typesSubToPB(sub, s.exchangeName))
 		}
 
+		// Use streamCtx directly for the Subscribe call. gRPC streams are
+		// tied to the context passed to the RPC for their entire lifetime —
+		// wrapping it in a timeout context and canceling after Subscribe
+		// returns kills the stream immediately (Recv returns "context
+		// canceled"). The pre-flight check above already ensures the server
+		// is reachable before we get here.
 		streamCtx, streamCancel := context.WithCancel(s.rootCtx)
 		client := pb.NewMarketDataServiceClient(conn)
 
-		subCtx, subCancel := context.WithTimeout(streamCtx, subscribeTimeout)
 		req := &pb.SubscribeRequest{Subscriptions: pbSubs}
-		stream, err := client.Subscribe(subCtx, req)
-		subCancel()
+		stream, err := client.Subscribe(streamCtx, req)
 		if err != nil {
 			streamCancel()
 			conn.Close()

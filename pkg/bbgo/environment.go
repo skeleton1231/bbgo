@@ -319,7 +319,12 @@ func (environ *Environment) configureSupabase() error {
 		MarginService:   environ.MarginService,
 		WithdrawService: environ.WithdrawService,
 		DepositService:  environ.DepositService,
-		FuturesService:  &service.FuturesService{DB: db, TablePrefix: prefix, UserID: userID},
+		FuturesService:  func() *service.FuturesService {
+			fs := service.NewFuturesService(db)
+			fs.TablePrefix = prefix
+			fs.UserID = userID
+			return fs
+		}(),
 	}
 
 	return nil

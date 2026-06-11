@@ -2,6 +2,7 @@ package bbgo
 
 import (
 	"context"
+	"fmt"
 
 	log "github.com/sirupsen/logrus"
 
@@ -15,14 +16,33 @@ type grpcExchangeProxy struct {
 	types.Exchange
 	exchangeName string
 	queryClient  *pb.MarketDataQueryClient
+	riskService  types.ExchangeRiskService
 }
 
 func newGRPCExchangeProxy(real types.Exchange, conn *grpc.ClientConn, exchangeName string) *grpcExchangeProxy {
-	return &grpcExchangeProxy{
+	p := &grpcExchangeProxy{
 		Exchange:     real,
 		exchangeName: exchangeName,
 		queryClient:  pb.NewMarketDataQueryClient(conn),
 	}
+	if rs, ok := real.(types.ExchangeRiskService); ok {
+		p.riskService = rs
+	}
+	return p
+}
+
+func (p *grpcExchangeProxy) QueryPositionRisk(ctx context.Context, symbol ...string) ([]types.PositionRisk, error) {
+	if p.riskService == nil {
+		return nil, fmt.Errorf("exchange %s does not implement ExchangeRiskService", p.exchangeName)
+	}
+	return p.riskService.QueryPositionRisk(ctx, symbol...)
+}
+
+func (p *grpcExchangeProxy) SetLeverage(ctx context.Context, symbol string, leverage int) error {
+	if p.riskService == nil {
+		return fmt.Errorf("exchange %s does not implement ExchangeRiskService", p.exchangeName)
+	}
+	return p.riskService.SetLeverage(ctx, symbol, leverage)
 }
 
 func (p *grpcExchangeProxy) QueryKLines(ctx context.Context, symbol string, interval types.Interval, options types.KLineQueryOptions) ([]types.KLine, error) {
@@ -110,5 +130,6 @@ func pbTickerToTypes(t *pb.Ticker) *types.Ticker {
 		Volume: fixedpoint.NewFromFloat(t.Volume),
 	}
 }
-// compile-time interface check
+// compile-time interface checks
 var _ types.Exchange = (*grpcExchangeProxy)(nil)
+var _ types.ExchangeRiskService = (*grpcExchangeProxy)(nil)
