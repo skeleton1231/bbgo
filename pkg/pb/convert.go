@@ -20,7 +20,7 @@ func safeFixedPoint(s string) fixedpoint.Value {
 }
 
 func PbKLineToTypes(k *KLine) types.KLine {
-	return types.KLine{
+	t := types.KLine{
 		Exchange:    types.ExchangeName(k.Exchange),
 		Symbol:      k.Symbol,
 		Open:        safeFixedPoint(k.Open),
@@ -33,6 +33,44 @@ func PbKLineToTypes(k *KLine) types.KLine {
 		EndTime:     types.Time(time.UnixMilli(k.EndTime)),
 		Closed:      k.Closed,
 	}
+	t.Interval = IntervalFromDurationMs(t.EndTime.Time().Sub(t.StartTime.Time()).Milliseconds())
+	return t
+}
+
+// IntervalFromDurationMs maps a kline duration in milliseconds to the canonical
+// types.Interval. The proto KLine message lacks an interval field, so the
+// interval must be derived from the start/end-time delta. Tolerates ±1% skew
+// to absorb sub-second alignment differences across exchanges.
+func IntervalFromDurationMs(ms int64) types.Interval {
+	switch {
+	case ms >= 57000 && ms <= 63000:
+		return types.Interval1m
+	case ms >= 177000 && ms <= 183000:
+		return types.Interval3m
+	case ms >= 297000 && ms <= 303000:
+		return types.Interval5m
+	case ms >= 897000 && ms <= 903000:
+		return types.Interval15m
+	case ms >= 1797000 && ms <= 1803000:
+		return types.Interval30m
+	case ms >= 3570000 && ms <= 3630000:
+		return types.Interval1h
+	case ms >= 7170000 && ms <= 7230000:
+		return types.Interval2h
+	case ms >= 14370000 && ms <= 14430000:
+		return types.Interval4h
+	case ms >= 21570000 && ms <= 21630000:
+		return types.Interval6h
+	case ms >= 43170000 && ms <= 43230000:
+		return types.Interval12h
+	case ms >= 86340000 && ms <= 86460000:
+		return types.Interval1d
+	case ms >= 259170000 && ms <= 259230000:
+		return types.Interval3d
+	case ms >= 604740000 && ms <= 604860000:
+		return types.Interval1w
+	}
+	return ""
 }
 
 func PbTradeToTypes(t *Trade) types.Trade {

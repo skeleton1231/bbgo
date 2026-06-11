@@ -102,8 +102,10 @@ func (b *SharedBroadcaster) ensureStream() {
 			if err := stream.Connect(ctx); err != nil {
 				log.WithError(err).Error("shared stream connect failed")
 				b.mu.Lock()
+				if b.stream == stream {
+					b.stream = nil
+				}
 				b.started = false
-				b.stream = nil
 				b.mu.Unlock()
 				return
 			}
@@ -114,32 +116,36 @@ func (b *SharedBroadcaster) ensureStream() {
 		return
 	}
 
-	if b.started {
-		_ = b.stream.Resubscribe(func(oldSubs []types.Subscription) ([]types.Subscription, error) {
-			all := make([]types.Subscription, len(oldSubs))
-			copy(all, oldSubs)
-			for key := range b.subs {
-				found := false
-				for _, existing := range all {
-					if string(existing.Channel) == key.channel && existing.Symbol == key.symbol && string(existing.Options.Interval) == key.interval && string(existing.Options.Depth) == key.depth {
-						found = true
-						break
-					}
-				}
-				if !found {
-					all = append(all, types.Subscription{
-						Channel: types.Channel(key.channel),
-						Symbol:  key.symbol,
-						Options: types.SubscribeOptions{
-							Interval: types.Interval(key.interval),
-							Depth:    types.Depth(key.depth),
-						},
-					})
+	// Stream exists (connecting or already connected). Resubscribe merges any
+	// newly-added subs into the stream's subscription list. Resubscribe sets
+	// s.Subscriptions BEFORE attempting reconnect, so subs added during the
+	// initial connect window are picked up by writeSubscriptions on first
+	// handleConnect. After connect, it triggers a reconnect that re-emits the
+	// full subscription set.
+	_ = b.stream.Resubscribe(func(oldSubs []types.Subscription) ([]types.Subscription, error) {
+		all := make([]types.Subscription, len(oldSubs))
+		copy(all, oldSubs)
+		for key := range b.subs {
+			found := false
+			for _, existing := range all {
+				if string(existing.Channel) == key.channel && existing.Symbol == key.symbol && string(existing.Options.Interval) == key.interval && string(existing.Options.Depth) == key.depth {
+					found = true
+					break
 				}
 			}
-			return all, nil
-		})
-	}
+			if !found {
+				all = append(all, types.Subscription{
+					Channel: types.Channel(key.channel),
+					Symbol:  key.symbol,
+					Options: types.SubscribeOptions{
+						Interval: types.Interval(key.interval),
+						Depth:    types.Depth(key.depth),
+					},
+				})
+			}
+		}
+		return all, nil
+	})
 }
 
 func (b *SharedBroadcaster) bindCallbacks(stream types.Stream) {
