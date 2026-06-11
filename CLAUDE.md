@@ -236,6 +236,34 @@ The paper trade engine (`pkg/bbgo/paper_trade_exchange.go` + `paper_trade_future
 5. Add config tests similar to `pkg/bbgo/config_test.go`
 6. Use `testify` for assertions (already in go.mod)
 
+### Strategy `Defaults()` and `Validate()` (required reading)
+
+A strategy that starts successfully but computes wrong values is **worse than one that crashes** — silent semantic failures can run for days placing wrong orders. Two discipline rules prevent this class of bug:
+
+**1. Fill defaults at the field level, not the pointer level.** User config often supplies a nested struct partially. Pattern:
+
+```go
+// WRONG — only handles "user omitted entire nested object"
+if s.Thing == nil { s.Thing = &DefaultThing }
+
+// RIGHT — also handles "user supplied Thing but left RequiredField zero"
+if s.Thing == nil { s.Thing = &Thing{} }
+if s.Thing.RequiredField == 0 { s.Thing.RequiredField = defaultRequiredField }
+if s.Thing.Interval == "" { s.Thing.Interval = s.Interval }
+```
+
+This matters for every strategy with nested config (bollmaker, rsmaker, pivotshort, etc.). See `pkg/strategy/bollmaker/strategy.go` `Defaults()` for the reference pattern and `pkg/strategy/bollmaker/defaults_test.go` for the regression test.
+
+**2. `Validate()` checks semantics, not just presence.** A struct field that exists but holds a zero value where a positive value is required (e.g. `BandWidth: 0` for BOLL where the formula is `sma ± k×stdDev`) will silently collapse the indicator. Refuse to start:
+
+```go
+if s.DefaultBollinger.BandWidth <= 0 {
+    return fmt.Errorf("defaultBollinger.bandWidth must be > 0, got %v", s.DefaultBollinger.BandWidth)
+}
+```
+
+When adding a new strategy: write `Defaults()` defensively (rule 1), write `Validate()` strictly (rule 2), and write a meta-test that calls `Defaults()` on an empty `Strategy{}` and asserts no semantically-required field remains zero.
+
 ### SaaS-Exposed Strategies (50 of 55+ registered)
 
 The SaaS frontend (`saas/web/src/lib/bbgo/strategies.ts`) exposes 50 strategies across 10 categories. Strategy metadata is centralized in the `strategy_registry` Supabase table (defaults, fields, liveOnly, requiresFutures). A code generation script (`saas/web/scripts/gen_strategy_types.mjs`) produces `saas/manager/strategy_types.go` from the frontend definitions. Strategies not in the SaaS frontend (etf, liquditycorr, marketcap, tradingdesk, tri, example/*) are intentionally excluded. 22 strategies are `liveOnly` (blocked from paper/simulation mode). 10 are cross-exchange strategies requiring multiple exchange sessions.

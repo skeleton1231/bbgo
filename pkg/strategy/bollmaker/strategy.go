@@ -229,11 +229,31 @@ func (s *Strategy) Defaults() error {
 			IntervalWindow: types.IntervalWindow{Interval: s.Interval, Window: 20},
 			BandWidth:      2.0,
 		}
+	} else {
+		if s.NeutralBollinger.Interval == "" {
+			s.NeutralBollinger.Interval = s.Interval
+		}
+		if s.NeutralBollinger.Window == 0 {
+			s.NeutralBollinger.Window = 20
+		}
+		if s.NeutralBollinger.BandWidth == 0 {
+			s.NeutralBollinger.BandWidth = 2.0
+		}
 	}
 	if s.DefaultBollinger == nil {
 		s.DefaultBollinger = &BollingerSetting{
 			IntervalWindow: types.IntervalWindow{Interval: s.Interval, Window: 20},
 			BandWidth:      3.0,
+		}
+	} else {
+		if s.DefaultBollinger.Interval == "" {
+			s.DefaultBollinger.Interval = s.Interval
+		}
+		if s.DefaultBollinger.Window == 0 {
+			s.DefaultBollinger.Window = 20
+		}
+		if s.DefaultBollinger.BandWidth == 0 {
+			s.DefaultBollinger.BandWidth = 3.0
 		}
 	}
 	return nil

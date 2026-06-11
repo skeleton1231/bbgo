@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -531,16 +532,31 @@ func (s *BacktestService) QueryExistingDataRange(
 	ctx context.Context, ex types.Exchange, symbol string, interval types.Interval, tArgs ...time.Time,
 ) (start, end *types.Time, err error) {
 	sel := s.SelectKLineTimeRange(ex, symbol, interval, tArgs...)
-	sql, args, err := sel.ToSql()
+	sqlStr, args, err := sel.ToSql()
 	if err != nil {
 		return nil, nil, err
 	}
 
+	fmt.Fprintf(os.Stderr, "DEBUG QueryExistingDataRange SQL: %s args: %v\n", sqlStr, args)
+
+	// Use raw query to check column count
+	debugRows, debugErr := s.DB.QueryContext(ctx, sqlStr, args...)
+	if debugErr != nil {
+		fmt.Fprintf(os.Stderr, "DEBUG query error: %v\n", debugErr)
+		return nil, nil, debugErr
+	}
+	if debugRows.Next() {
+		cols, _ := debugRows.Columns()
+		fmt.Fprintf(os.Stderr, "DEBUG column count: %d names: %v\n", len(cols), cols)
+	}
+	debugRows.Close()
+
 	var t1, t2 types.Time
 
-	row := s.DB.QueryRowContext(ctx, sql, args...)
+	row := s.DB.QueryRowContext(ctx, sqlStr, args...)
 
 	if err := row.Scan(&t1, &t2); err != nil {
+		fmt.Fprintf(os.Stderr, "DEBUG Scan error: %v\n", err)
 		return nil, nil, err
 	}
 
