@@ -8,8 +8,8 @@ import (
 	"time"
 
 	sq "github.com/Masterminds/squirrel"
-	"github.com/jmoiron/sqlx"
 	"github.com/c9s/bbgo/pkg/types"
+	"github.com/jmoiron/sqlx"
 )
 
 type FuturesService struct {
@@ -164,7 +164,7 @@ func (s *FuturesService) Insert(risk types.PositionRisk) (err error) {
 			:mark_price, :break_even_price, :unrealized_pnl, :notional, :initial_margin, :maint_margin,
 			:position_initial_margin, :open_order_initial_margin, :adl, :margin_asset,
 			:position_amount, :updated_at, :strategy_instance_id, :user_id
-	)`,
+		)`,
 			map[string]interface{}{
 				"exchange":                  risk.Exchange,
 				"symbol":                    risk.Symbol,
@@ -184,7 +184,7 @@ func (s *FuturesService) Insert(risk types.PositionRisk) (err error) {
 				"margin_asset":              risk.MarginAsset,
 				"position_amount":           risk.PositionAmount,
 				"updated_at":                risk.UpdateTime.Time(),
-			"strategy_instance_id":     risk.StrategyInstanceID,
+				"strategy_instance_id":      risk.StrategyInstanceID,
 				"user_id":                   s.UserID,
 			})
 
