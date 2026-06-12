@@ -17,13 +17,15 @@ import (
 	"github.com/c9s/bbgo/pkg/types"
 )
 
-// paperOrderIDHashMask occupies the top 16 bits of paperOrderID/paperTradeID.
+// paperOrderIDHashMask occupies the top 15 bits of paperOrderID/paperTradeID.
 // Bottom 48 bits hold the ms-timestamp-seeded counter — plenty of headroom
-// (2^48 ms ≈ 8.9M years). The high 16 bits carry a per-container hash of
+// (2^48 ms ≈ 8.9M years). Bits 48-62 carry a per-container hash of
 // BBGO_STRATEGY_INSTANCE_ID so that two paper bots sharing one Supabase
 // paper_orders table cannot generate overlapping order_id ranges.
+// Bit 63 is left clear so every generated ID fits in a PostgreSQL BIGINT
+// (signed int64 max = 9223372036854775807).
 const paperOrderIDHashShift = 48
-const paperOrderIDHashMask = uint64(0xFFFF) << paperOrderIDHashShift
+const paperOrderIDHashMask = uint64(0x7FFF) << paperOrderIDHashShift
 
 var paperOrderIDHashOffset uint64
 
@@ -35,7 +37,7 @@ func init() {
 	if id := os.Getenv("BBGO_STRATEGY_INSTANCE_ID"); id != "" {
 		h := fnv.New64a()
 		_, _ = h.Write([]byte(id))
-		paperOrderIDHashOffset = (h.Sum64() & 0xFFFF) << paperOrderIDHashShift
+		paperOrderIDHashOffset = (h.Sum64() & 0x7FFF) << paperOrderIDHashShift
 		base &^= paperOrderIDHashMask
 	}
 	paperOrderID = base | paperOrderIDHashOffset
