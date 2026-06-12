@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -459,6 +460,17 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 		method.Bind(session, s.orderExecutor)
 	}
 
+	log.WithFields(logrus.Fields{
+		"symbol":                  s.Symbol,
+		"interval":                s.Interval.String(),
+		"supertrendMultiplier":    s.SupertrendMultiplier,
+		"fastDEMAWindow":          s.FastDEMAWindow,
+		"slowDEMAWindow":          s.SlowDEMAWindow,
+		"leverage":                s.Leverage.String(),
+		"quantity":                s.Quantity.String(),
+		"takeProfitAtrMultiplier": s.TakeProfitAtrMultiplier,
+	}).Infof("strategy started")
+
 	session.MarketDataStream.OnKLineClosed(types.KLineWith(s.Symbol, s.Interval, func(kline types.KLine) {
 		// StrategyController
 		if s.Status != types.StrategyStatusRunning {
@@ -492,6 +504,23 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 
 		// Get order side
 		side := s.getSide(stSignal, demaSignal, lgSignal)
+
+		log.WithFields(logrus.Fields{
+			"symbol":       kline.Symbol,
+			"interval":     s.Interval.String(),
+			"open":         kline.GetOpen().String(),
+			"high":         kline.GetHigh().String(),
+			"low":          kline.GetLow().String(),
+			"close":        closePrice.String(),
+			"volume":       kline.Volume.String(),
+			"stSignal":     int(stSignal),
+			"demaSignal":   int(demaSignal),
+			"lgSignal":     int(lgSignal),
+			"side":         string(side),
+			"positionBase": s.Position.GetBase().String(),
+			"startTime":    kline.StartTime.Time().UTC().Format(time.RFC3339),
+		}).Infof("kline closed")
+
 		// Set TP/SL price if needed
 		if side == types.SideTypeBuy {
 			if s.StopLossByTriggeringK {
@@ -537,6 +566,14 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 			if err != nil {
 				log.WithError(err).Errorf("can not place %s open position order", s.Symbol)
 				bbgo.Notify("can not place %s open position order", s.Symbol)
+			} else {
+				log.WithFields(logrus.Fields{
+					"symbol":   s.Symbol,
+					"side":     string(side),
+					"amount":   amount.String(),
+					"price":    closePrice.String(),
+					"interval": s.Interval.String(),
+				}).Infof("open position order submitted")
 			}
 		}
 	}))

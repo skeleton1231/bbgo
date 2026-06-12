@@ -2,12 +2,28 @@ package pivotshort
 
 import (
 	"context"
+	"runtime/debug"
+	"time"
+
+	"github.com/sirupsen/logrus"
 
 	"github.com/c9s/bbgo/pkg/bbgo"
 	"github.com/c9s/bbgo/pkg/fixedpoint"
 	"github.com/c9s/bbgo/pkg/indicator"
 	"github.com/c9s/bbgo/pkg/types"
 )
+
+func recoverKLineHandler(name string, log logrus.FieldLogger) func() {
+	return func() {
+		if r := recover(); r != nil {
+			log.WithFields(logrus.Fields{
+				"handler": name,
+				"panic":   r,
+				"stack":   string(debug.Stack()),
+			}).Errorf("pivotshort kline handler panic recovered")
+		}
+	}
+}
 
 type FakeBreakStop struct {
 	types.IntervalWindow
@@ -111,7 +127,27 @@ func (s *BreakLow) Bind(session *bbgo.ExchangeSession, orderExecutor *bbgo.Gener
 	})
 
 	session.MarketDataStream.OnKLineClosed(types.KLineWith(symbol, s.Interval, func(kline types.KLine) {
-		if s.updatePivotLow() {
+		defer recoverKLineHandler("breaklow_15m", log)
+		pivotLowChanged := s.updatePivotLow()
+
+		log.WithFields(logrus.Fields{
+			"symbol":         kline.Symbol,
+			"interval":       s.Interval.String(),
+			"close":          kline.Close.String(),
+			"open":           kline.Open.String(),
+			"high":           kline.High.String(),
+			"low":            kline.Low.String(),
+			"volume":         kline.Volume.String(),
+			"pivotLowLen":    len(s.pivotLowPrices),
+			"lastLow":        s.lastLow.String(),
+			"lastBreakLow":   s.lastBreakLow.String(),
+			"pivotChanged":   pivotLowChanged,
+			"positionBase":   position.GetBase().String(),
+			"positionOpened": position.IsOpened(kline.Close),
+			"startTime":      kline.StartTime.Time().UTC().Format(time.RFC3339),
+		}).Infof("kline closed")
+
+		if pivotLowChanged {
 			// when position is opened, do not send pivot low notify
 			if position.IsOpened(kline.Close) {
 				return
@@ -125,6 +161,7 @@ func (s *BreakLow) Bind(session *bbgo.ExchangeSession, orderExecutor *bbgo.Gener
 		// if the position is already opened, and we just break the low, this checks if the kline closed above the low,
 		// so that we can close the position earlier
 		session.MarketDataStream.OnKLineClosed(types.KLineWith(s.Symbol, s.FakeBreakStop.Interval, func(k types.KLine) {
+			defer recoverKLineHandler("breaklow_fakeBreakStop", log)
 			// make sure the position is opened, and it's a short position
 			if !position.IsOpened(k.Close) || !position.IsShort() {
 				return
@@ -149,6 +186,7 @@ func (s *BreakLow) Bind(session *bbgo.ExchangeSession, orderExecutor *bbgo.Gener
 	}
 
 	session.MarketDataStream.OnKLineClosed(types.KLineWith(s.Symbol, types.Interval1m, func(kline types.KLine) {
+		defer recoverKLineHandler("breaklow_1m", log)
 		if len(s.pivotLowPrices) == 0 || s.lastLow.IsZero() {
 			log.Infof("currently there is no pivot low prices, can not check break low...")
 			return
@@ -232,6 +270,14 @@ func (s *BreakLow) Bind(session *bbgo.ExchangeSession, orderExecutor *bbgo.Gener
 
 		if _, err := s.orderExecutor.OpenPosition(ctx, opts); err != nil {
 			log.WithError(err).Errorf("failed to open short position")
+		} else {
+			log.WithFields(logrus.Fields{
+				"symbol":     symbol,
+				"interval":   s.Interval.String(),
+				"price":      opts.Price.String(),
+				"previousLow": previousLow.String(),
+				"breakPrice": breakPrice.String(),
+			}).Infof("break-low signal fired, opened short position")
 		}
 	}))
 }

@@ -127,6 +127,16 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 	// StrategyController
 	s.Status = types.StrategyStatusRunning
 
+	log.WithFields(logrus.Fields{
+		"symbol":          s.Symbol,
+		"interval":        s.Interval.String(),
+		"leverage":        s.Leverage.String(),
+		"quantity":        s.Quantity.String(),
+		"breakLowEnabled": s.BreakLow != nil,
+		"failedBreakHigh": s.FailedBreakHigh != nil,
+		"resistanceShort": s.ResistanceShort != nil && s.ResistanceShort.Enabled,
+	}).Infof("strategy started")
+
 	s.OnSuspend(func() {
 		// Cancel active orders
 		_ = s.orderExecutor.GracefulCancel(ctx)

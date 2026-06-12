@@ -586,10 +586,22 @@ func (s *Strategy) klineHandler(ctx context.Context, kline types.KLine, counter 
 	drift := s.drift.Array(2)
 
 	if len(drift) < 2 || len(drift) < s.PredictOffset {
+		log.WithFields(logrus.Fields{
+			"symbol":        kline.Symbol,
+			"interval":      kline.Interval.String(),
+			"driftLen":      len(drift),
+			"predictOffset": s.PredictOffset,
+		}).Warnf("klineHandler skipping, drift indicator not warmed up")
 		return
 	}
 	ddrift := s.drift.drift.Array(2)
 	if len(ddrift) < 2 || len(ddrift) < s.PredictOffset {
+		log.WithFields(logrus.Fields{
+			"symbol":        kline.Symbol,
+			"interval":      kline.Interval.String(),
+			"ddriftLen":     len(ddrift),
+			"predictOffset": s.PredictOffset,
+		}).Warnf("klineHandler skipping, drift-derivative not warmed up")
 		return
 	}
 
@@ -779,6 +791,15 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 	// StrategyController
 	s.Status = types.StrategyStatusRunning
 
+	log.WithFields(logrus.Fields{
+		"symbol":        s.Symbol,
+		"interval":      s.Interval.String(),
+		"minInterval":   s.MinInterval.String(),
+		"leverage":      s.Leverage.String(),
+		"quantity":      s.Quantity.String(),
+		"predictOffset": s.PredictOffset,
+	}).Infof("strategy started")
+
 	s.OnSuspend(func() {
 		_ = s.FastOrderExecutor.GracefulCancel(ctx)
 	})
@@ -959,6 +980,17 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 	store.OnKLineClosed(func(kline types.KLine) {
 		counter := int(kline.StartTime.Time().Add(kline.Interval.Duration()).Sub(s.startTime).Milliseconds()) / s.MinInterval.Milliseconds()
 		syscounter = counter
+		log.WithFields(logrus.Fields{
+			"symbol":    kline.Symbol,
+			"interval":  kline.Interval.String(),
+			"close":     kline.Close.String(),
+			"open":      kline.Open.String(),
+			"high":      kline.High.String(),
+			"low":       kline.Low.String(),
+			"volume":    kline.Volume.String(),
+			"counter":   counter,
+			"startTime": kline.StartTime.Time().UTC().Format(time.RFC3339),
+		}).Infof("kline received")
 		if kline.Interval == s.Interval {
 			s.klineHandler(ctx, kline, counter)
 		} else if kline.Interval == s.MinInterval {
