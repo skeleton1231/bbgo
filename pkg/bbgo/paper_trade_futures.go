@@ -17,12 +17,18 @@ const (
 	fundingInterval         = 8 * time.Hour
 )
 
+// PositionModeOneWay is the one-way futures position mode (Binance positionSide=BOTH).
+// The paper trade engine currently only supports one-way mode; hedge mode is left as
+// future work. In one-way mode there is exactly one position slot per symbol and the
+// position_amount sign indicates direction (positive=long, negative=short).
+const PositionModeOneWay = "BOTH"
+
 // paperFuturesState tracks simulated futures state per symbol.
 type paperFuturesState struct {
 	Leverage           int
 	PositionAmount     fixedpoint.Value // positive = long, negative = short
 	EntryPrice         fixedpoint.Value
-	PositionSide       types.PositionType
+	PositionSide       types.PositionType // always "BOTH" in one-way mode
 	MarginAsset        string
 	IsolatedSymbol     string
 	StrategyInstanceID string
@@ -181,8 +187,9 @@ func (e *PaperTradeExchange) getOrCreateFuturesState(symbol string) *paperFuture
 	state, ok := e.futuresStates[symbol]
 	if !ok {
 		state = &paperFuturesState{
-			Leverage:    20,
-			MarginAsset: "USDT",
+			Leverage:     20,
+			MarginAsset:  "USDT",
+			PositionSide: types.PositionType(PositionModeOneWay),
 		}
 		e.futuresStates[symbol] = state
 	}
@@ -233,7 +240,9 @@ func getMaintenanceMarginRate(notional fixedpoint.Value) fixedpoint.Value {
 
 // computePositionRiskLocked calculates simulated position risk from current state.
 // Returns a risk with position_amount=0 for closed positions, so bbgo's FuturesService
-// can persist the closed state to the database.
+// can persist the closed state to the database. position_side is always "BOTH" in one-way
+// mode, so the closed snapshot lands on the same DB row as the open snapshot and updates
+// it in place via the (exchange, symbol, position_side) unique key.
 // Must be called with e.mu held.
 func (e *PaperTradeExchange) computePositionRiskLocked(symbol string) types.PositionRisk {
 	state, ok := e.futuresStates[symbol]
@@ -243,7 +252,8 @@ func (e *PaperTradeExchange) computePositionRiskLocked(symbol string) types.Posi
 		}
 	}
 
-	// Closed position: return minimal risk so FuturesService updates DB to amount=0
+	// Closed position: return minimal risk so FuturesService updates DB to amount=0.
+	// position_side stays "BOTH" so the close snapshot hits the same DB row.
 	if state.PositionAmount.IsZero() {
 		return types.PositionRisk{
 			Exchange:           e.inner.Name(),
@@ -291,15 +301,10 @@ func (e *PaperTradeExchange) computePositionRiskLocked(symbol string) types.Posi
 		)
 	}
 
-	positionSide := types.PositionLong
-	if state.PositionAmount.Sign() < 0 {
-		positionSide = types.PositionShort
-	}
-
 	return types.PositionRisk{
 		Exchange:               e.inner.Name(),
 		Symbol:                 symbol,
-		PositionSide:           positionSide,
+		PositionSide:           state.PositionSide,
 		EntryPrice:             state.EntryPrice,
 		Leverage:               leverage,
 		LiquidationPrice:       liquidationPrice,
@@ -378,13 +383,11 @@ func (e *PaperTradeExchange) updateFuturesPositionLocked(symbol string, side typ
 		}
 	}
 
-	if state.PositionAmount.Sign() > 0 {
-		state.PositionSide = types.PositionLong
-	} else if state.PositionAmount.Sign() < 0 {
-		state.PositionSide = types.PositionShort
-	} else {
-		state.PositionSide = types.PositionType("")
-	}
+	// One-way mode: position_side is always "BOTH". Direction is encoded in the sign
+	// of PositionAmount (positive=long, negative=short). Keeping side constant across
+	// open/flip/close means each (symbol, strategy_instance_id) lands on a single DB
+	// row and close/flip snapshots correctly overwrite the open snapshot.
+	state.PositionSide = types.PositionType(PositionModeOneWay)
 
 	if strategyInstanceID != "" {
 		state.StrategyInstanceID = strategyInstanceID

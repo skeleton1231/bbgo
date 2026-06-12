@@ -87,7 +87,7 @@ func TestPaperTradeExchange_QueryPositionRisk_AfterTrade(t *testing.T) {
 
 	r := risks[0]
 	assert.Equal(t, "BTCUSDT", r.Symbol)
-	assert.Equal(t, types.PositionLong, r.PositionSide)
+	assert.Equal(t, types.PositionType(PositionModeOneWay), r.PositionSide)
 	assert.True(t, r.PositionAmount.Compare(fixedpoint.NewFromFloat(1.0)) == 0)
 	assert.True(t, r.EntryPrice.Compare(fixedpoint.NewFromFloat(50000.0)) == 0)
 	assert.True(t, r.Leverage.Compare(fixedpoint.NewFromInt(20)) == 0)
@@ -105,12 +105,12 @@ func TestPaperTradeExchange_ShortPosition(t *testing.T) {
 
 	state := e.futuresStates["BTCUSDT"]
 	assert.True(t, state.PositionAmount.Sign() < 0)
-	assert.Equal(t, types.PositionShort, state.PositionSide)
+	assert.Equal(t, types.PositionType(PositionModeOneWay), state.PositionSide)
 
 	risks, err := e.QueryPositionRisk(context.Background(), "BTCUSDT")
 	require.NoError(t, err)
 	require.Len(t, risks, 1)
-	assert.Equal(t, types.PositionShort, risks[0].PositionSide)
+	assert.Equal(t, types.PositionType(PositionModeOneWay), risks[0].PositionSide)
 }
 
 func TestPaperTradeExchange_CloseLongPosition(t *testing.T) {
@@ -140,7 +140,7 @@ func TestPaperTradeExchange_FlipLongToShort(t *testing.T) {
 	state := e.futuresStates["BTCUSDT"]
 	assert.True(t, state.PositionAmount.Sign() < 0)
 	assert.True(t, state.PositionAmount.Abs().Compare(fixedpoint.NewFromFloat(0.5)) == 0)
-	assert.Equal(t, types.PositionShort, state.PositionSide)
+	assert.Equal(t, types.PositionType(PositionModeOneWay), state.PositionSide)
 	assert.True(t, state.EntryPrice.Compare(fixedpoint.NewFromFloat(52000.0)) == 0)
 }
 
@@ -158,7 +158,7 @@ func TestPaperTradeExchange_FlipShortToLong(t *testing.T) {
 	state := e.futuresStates["BTCUSDT"]
 	assert.True(t, state.PositionAmount.Sign() > 0)
 	assert.True(t, state.PositionAmount.Compare(fixedpoint.NewFromFloat(0.5)) == 0)
-	assert.Equal(t, types.PositionLong, state.PositionSide)
+	assert.Equal(t, types.PositionType(PositionModeOneWay), state.PositionSide)
 	assert.True(t, state.EntryPrice.Compare(fixedpoint.NewFromFloat(48000.0)) == 0)
 }
 
@@ -571,7 +571,7 @@ func TestPaperTradeExchange_KlineFill_TracksFuturesPosition(t *testing.T) {
 	risks, err := e.QueryPositionRisk(context.Background(), "BTCUSDT")
 	require.NoError(t, err)
 	require.Len(t, risks, 1)
-	assert.Equal(t, types.PositionLong, risks[0].PositionSide)
+	assert.Equal(t, types.PositionType(PositionModeOneWay), risks[0].PositionSide)
 	assert.True(t, risks[0].PositionAmount.Compare(fixedpoint.NewFromFloat(1.0)) == 0)
 }
 
@@ -603,7 +603,7 @@ func TestPaperTradeExchange_KlineFill_ShortSell(t *testing.T) {
 	risks, err := e.QueryPositionRisk(context.Background(), "BTCUSDT")
 	require.NoError(t, err)
 	require.Len(t, risks, 1)
-	assert.Equal(t, types.PositionShort, risks[0].PositionSide)
+	assert.Equal(t, types.PositionType(PositionModeOneWay), risks[0].PositionSide)
 	assert.True(t, risks[0].PositionAmount.Abs().Compare(fixedpoint.NewFromFloat(0.5)) == 0)
 }
 
@@ -619,4 +619,79 @@ func TestPaperTradeExchange_SpotSellRejectsWithoutBalance(t *testing.T) {
 		Price:    fixedpoint.NewFromFloat(50000.0),
 	})
 	assert.Error(t, err, "spot sell without BTC balance should fail")
+}
+
+// TestPaperTradeExchange_OneWayPositionSide_StaysBothAcrossLifecycle is the regression
+// test for the C2 root cause: previously, closing a one-way position reset
+// state.PositionSide to "" which produced a DB snapshot on a different
+// (exchange, symbol, position_side) bucket than the open snapshot, leaving the
+// open row stale forever. In one-way mode the side must stay "BOTH" across
+// open/flip/close so each snapshot lands on the same DB row.
+func TestPaperTradeExchange_OneWayPositionSide_StaysBothAcrossLifecycle(t *testing.T) {
+	e := newTestPaperTradeExchange()
+	e.UseFutures()
+
+	state := e.getOrCreateFuturesState("BTCUSDT")
+	preCreateSide := state.PositionSide
+
+	e.mu.Lock()
+	// Open long
+	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(1.0), "")
+	openSide := state.PositionSide
+	openRisk := e.computePositionRiskLocked("BTCUSDT")
+	// Flip to short (sell 2 — closes the long and opens short 1)
+	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeSell, fixedpoint.NewFromFloat(52000.0), fixedpoint.NewFromFloat(2.0), "")
+	flipSide := state.PositionSide
+	flipRisk := e.computePositionRiskLocked("BTCUSDT")
+	// Close the short
+	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(51000.0), fixedpoint.NewFromFloat(1.0), "")
+	closeSide := state.PositionSide
+	closeRisk := e.computePositionRiskLocked("BTCUSDT")
+	e.mu.Unlock()
+
+	expected := types.PositionType(PositionModeOneWay)
+	assert.Equal(t, expected, preCreateSide, "state must be seeded with BOTH on creation")
+	assert.Equal(t, expected, openSide, "open: side must be BOTH")
+	assert.Equal(t, expected, flipSide, "flip: side must remain BOTH")
+	assert.Equal(t, expected, closeSide, "close: side must remain BOTH, NOT reset to empty")
+
+	assert.Equal(t, expected, openRisk.PositionSide)
+	assert.Equal(t, expected, flipRisk.PositionSide)
+	assert.Equal(t, expected, closeRisk.PositionSide, "close snapshot side must match open snapshot side so DB upsert hits the same row")
+
+	assert.True(t, openRisk.PositionAmount.Sign() > 0)
+	assert.True(t, flipRisk.PositionAmount.Sign() < 0)
+	assert.True(t, closeRisk.PositionAmount.IsZero(), "close snapshot must carry amount=0")
+}
+
+// TestPaperTradeExchange_OneWayPositionSide_NeverEmpty asserts the invariant
+// directly: across a randomized sequence of buys/sells, position_side must
+// never become the empty string. This catches any future regression that
+// reintroduces the C2 bug.
+func TestPaperTradeExchange_OneWayPositionSide_NeverEmpty(t *testing.T) {
+	e := newTestPaperTradeExchange()
+	e.UseFutures()
+
+	trades := []struct {
+		side types.SideType
+		qty  float64
+	}{
+		{types.SideTypeBuy, 0.3},
+		{types.SideTypeBuy, 0.2},
+		{types.SideTypeSell, 0.1},
+		{types.SideTypeSell, 0.6}, // flip to short
+		{types.SideTypeSell, 0.2},
+		{types.SideTypeBuy, 0.4},  // flip back to long
+		{types.SideTypeSell, 0.5}, // close exactly
+	}
+
+	e.mu.Lock()
+	for _, tr := range trades {
+		e.updateFuturesPositionLocked("BTCUSDT", tr.side, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(tr.qty), "")
+		state := e.futuresStates["BTCUSDT"]
+		assert.NotEqual(t, types.PositionType(""), state.PositionSide,
+			"position_side must never be empty after trade %+v", tr)
+		assert.Equal(t, types.PositionType(PositionModeOneWay), state.PositionSide)
+	}
+	e.mu.Unlock()
 }
