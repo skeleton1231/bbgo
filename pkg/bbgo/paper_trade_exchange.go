@@ -3,6 +3,7 @@ package bbgo
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"strconv"
 	"sync"
@@ -16,12 +17,28 @@ import (
 	"github.com/c9s/bbgo/pkg/types"
 )
 
+// paperOrderIDHashMask occupies the top 16 bits of paperOrderID/paperTradeID.
+// Bottom 48 bits hold the ms-timestamp-seeded counter — plenty of headroom
+// (2^48 ms ≈ 8.9M years). The high 16 bits carry a per-container hash of
+// BBGO_STRATEGY_INSTANCE_ID so that two paper bots sharing one Supabase
+// paper_orders table cannot generate overlapping order_id ranges.
+const paperOrderIDHashShift = 48
+const paperOrderIDHashMask = uint64(0xFFFF) << paperOrderIDHashShift
+
+var paperOrderIDHashOffset uint64
+
 var paperOrderID uint64
 var paperTradeID uint64
 
 func init() {
-	// Use time-based offset to avoid UNIQUE constraint collisions across restarts
-	paperOrderID = uint64(time.Now().UnixNano()) / 1e6
+	base := uint64(time.Now().UnixNano()) / 1e6
+	if id := os.Getenv("BBGO_STRATEGY_INSTANCE_ID"); id != "" {
+		h := fnv.New64a()
+		_, _ = h.Write([]byte(id))
+		paperOrderIDHashOffset = (h.Sum64() & 0xFFFF) << paperOrderIDHashShift
+		base &^= paperOrderIDHashMask
+	}
+	paperOrderID = base | paperOrderIDHashOffset
 	paperTradeID = paperOrderID
 }
 
@@ -575,9 +592,14 @@ func (e *PaperTradeExchange) RestoreFromDB(ctx context.Context) error {
 		}
 	}
 
+	// Bump the counter portion to maxOrderID, but preserve this container's
+	// hash offset. maxOrderID may come from pre-fix rows (no hash bits); strip
+	// any high bits it carries so we don't pick up another strategy's namespace.
+	maxCounter := maxOrderID &^ paperOrderIDHashMask
+	bumped := maxCounter | paperOrderIDHashOffset
 	for {
 		current := atomic.LoadUint64(&paperOrderID)
-		if maxOrderID <= current || atomic.CompareAndSwapUint64(&paperOrderID, current, maxOrderID) {
+		if bumped <= current || atomic.CompareAndSwapUint64(&paperOrderID, current, bumped) {
 			break
 		}
 	}
