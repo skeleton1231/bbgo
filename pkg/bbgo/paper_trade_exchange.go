@@ -191,6 +191,10 @@ func (m *paperMatchingBook) ProcessKLine(kline types.KLine) {
 		}
 	}
 
+	if liqFill := m.checkLiquidation(kline); liqFill != nil {
+		fills = append(fills, *liqFill)
+	}
+
 	m.emitFills(fills)
 }
 
@@ -200,6 +204,109 @@ type paperFill struct {
 	Trade    types.Trade
 	Order    types.Order
 	Balances types.BalanceMap
+}
+
+// checkLiquidation force-closes a futures position when the kline's price
+// range crosses the liquidation price. Longs liquidate when Low <= liqPrice,
+// shorts when High >= liqPrice. The entire position is closed at liqPrice.
+func (m *paperMatchingBook) checkLiquidation(kline types.KLine) *paperFill {
+	if m.Parent == nil || !m.Parent.futuresSettings.IsFutures {
+		return nil
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.Parent.mu.Lock()
+	defer m.Parent.mu.Unlock()
+
+	state, ok := m.Parent.futuresStates[kline.Symbol]
+	if !ok || state.PositionAmount.IsZero() {
+		return nil
+	}
+
+	risk := m.Parent.computePositionRiskLocked(kline.Symbol)
+	liqPrice := risk.LiquidationPrice
+	if liqPrice.IsZero() {
+		return nil
+	}
+
+	var shouldLiquidate bool
+	var closeSide types.SideType
+	if state.PositionAmount.Sign() > 0 {
+		shouldLiquidate = kline.Low.Compare(liqPrice) <= 0
+		closeSide = types.SideTypeSell
+	} else {
+		shouldLiquidate = kline.High.Compare(liqPrice) >= 0
+		closeSide = types.SideTypeBuy
+	}
+
+	if !shouldLiquidate {
+		return nil
+	}
+
+	closeQty := state.PositionAmount.Abs()
+	entryPrice := state.EntryPrice
+
+	realizedPnL := m.Parent.computeRealizedPnLLocked(kline.Symbol, closeSide, liqPrice, closeQty)
+	m.Parent.updateFuturesPositionLocked(kline.Symbol, closeSide, liqPrice, closeQty, state.StrategyInstanceID)
+
+	now := types.Time(m.currentTime)
+	if time.Time(now).IsZero() {
+		now = types.Time(time.Now())
+	}
+
+	quoteQty := closeQty.Mul(liqPrice)
+	fee := quoteQty.Mul(fixedpoint.NewFromFloat(paperFuturesTakerFeeRate))
+	orderID := nextPaperOrderID()
+
+	trade := types.Trade{
+		ID:                 nextPaperTradeID(),
+		OrderID:            orderID,
+		Exchange:           m.Parent.inner.Name(),
+		Symbol:             kline.Symbol,
+		Side:               closeSide,
+		Price:              liqPrice,
+		Quantity:           closeQty,
+		QuoteQuantity:      quoteQty,
+		IsBuyer:            closeSide == types.SideTypeBuy,
+		IsMaker:            false,
+		Fee:                fee,
+		FeeCurrency:        m.Market.QuoteCurrency,
+		StrategyInstanceID: state.StrategyInstanceID,
+		Time:               now,
+		IsFutures:          true,
+	}
+	if realizedPnL != 0.0 {
+		trade.PnL = sql.NullFloat64{Float64: realizedPnL, Valid: true}
+	}
+
+	order := types.Order{
+		SubmitOrder: types.SubmitOrder{
+			Symbol:       kline.Symbol,
+			Side:         closeSide,
+			Type:         types.OrderTypeMarket,
+			Price:        liqPrice,
+			Quantity:     closeQty,
+			AveragePrice: liqPrice,
+		},
+		Exchange:           m.Parent.inner.Name(),
+		OrderID:            orderID,
+		ExecutedQuantity:   closeQty,
+		Status:             types.OrderStatusFilled,
+		StrategyInstanceID: state.StrategyInstanceID,
+		UpdateTime:         now,
+		IsFutures:          true,
+	}
+
+	log.Infof("paper trade: LIQUIDATION %s %s qty=%s @ %s (entry was %s) PnL=%.4f",
+		kline.Symbol, closeSide, closeQty.String(), liqPrice.String(), entryPrice.String(), realizedPnL)
+
+	return &paperFill{
+		Trade:    trade,
+		Order:    order,
+		Balances: m.Account.Balances(),
+	}
 }
 
 // buyToPrice simulates price going up — limit sell orders get filled.
