@@ -713,7 +713,75 @@ func (session *ExchangeSession) Init(ctx context.Context, environ *Environment) 
 			session.paperTradeExchange.OnKLineClosed(kline)
 		})
 
-		// Start background services (futures position risk sync, margin interest accrual)
+		// Record periodic NAV snapshots so the equity curve reflects actual
+		// balance evolution instead of being reconstructed from trades only.
+		if environ.AccountService != nil {
+			priceSolver := session.GetPriceSolver()
+			session.paperTradeExchange.OnPeriodicNAVRecord = func(t time.Time) {
+				balances := session.EffectiveBalances().NotZero()
+				if len(balances) == 0 {
+					return
+				}
+				if err := session.AccountValueCalculator.UpdatePrices(ctx); err != nil {
+					logger.WithError(err).Warn("paper NAV: price update failed")
+				}
+				// Build a PriceMap keyed by symbol (e.g. "BTCUSDT") so
+				// balances.Assets can compute NetAssetInUSD per currency.
+				prices := types.PriceMap{}
+				if priceSolver != nil {
+					for cu := range balances {
+						if currency2.IsUSDFiatCurrency(cu) {
+							continue
+						}
+						if p, ok := priceSolver.ResolvePrice(cu, "USDT"); ok {
+							prices[cu+"USDT"] = p
+						}
+					}
+				}
+				assets := balances.Assets(prices, t)
+				environ.RecordAsset(t, session, assets)
+			}
+		}
+
+		// Persist margin borrow/repay/interest events so the paper equity
+		// curve reflects real cost-of-capital instead of silently mutating
+		// balances with no audit trail.
+		if environ.MarginService != nil {
+			ms := environ.MarginService
+			exName := session.ExchangeName
+			session.paperTradeExchange.OnMarginLoan = func(loan types.MarginLoan) {
+				loan.Exchange = exName
+				if err := ms.InsertLoan(loan); err != nil {
+					logger.WithError(err).Warn("paper: failed to insert margin loan")
+				}
+			}
+			session.paperTradeExchange.OnMarginRepay = func(repay types.MarginRepay) {
+				repay.Exchange = exName
+				if err := ms.InsertRepay(repay); err != nil {
+					logger.WithError(err).Warn("paper: failed to insert margin repay")
+				}
+			}
+			session.paperTradeExchange.OnMarginInterest = func(interest types.MarginInterest) {
+				interest.Exchange = exName
+				if err := ms.InsertInterest(interest); err != nil {
+					logger.WithError(err).Warn("paper: failed to insert margin interest")
+				}
+			}
+		}
+
+		// Funding payments have no dedicated table; the balance effect is
+		// captured by the NAV ticker above. Log for observability so the
+		// event is at least visible in paper mode.
+		session.paperTradeExchange.OnFundingPayment = func(p types.FundingPayment) {
+			logger.WithFields(log.Fields{
+				"symbol": p.Symbol,
+				"asset":  p.Asset,
+				"amount": p.Amount.String(),
+				"rate":   p.Rate.String(),
+			}).Info("paper: funding payment applied")
+		}
+
+		// Start background services (futures position risk sync, margin interest accrual, NAV ticker)
 		session.paperTradeExchange.StartBackgroundServices(ctx)
 	}
 	session.MarketDataStream.OnMarketTrade(func(trade types.Trade) {

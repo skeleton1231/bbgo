@@ -6,6 +6,7 @@ import (
 	"hash/fnv"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -52,7 +53,16 @@ func nextPaperTradeID() uint64 {
 	return atomic.AddUint64(&paperTradeID, 1)
 }
 
-const paperTradeFeeRate = 0.001
+// Fee rates approximate Binance retail tiers. Spot is 0.1% for both maker and
+// taker. USD-M futures are 0.02% maker / 0.04% taker. Without this split,
+// paper-trade PnL overstates futures costs by ~25× and produces strategies
+// that look unprofitable in paper but viable live.
+const (
+	paperSpotMakerFeeRate   = 0.001
+	paperSpotTakerFeeRate   = 0.001
+	paperFuturesMakerFeeRate = 0.0002
+	paperFuturesTakerFeeRate = 0.0004
+)
 
 // isPaperLimitTaker checks if a limit order would immediately match on a real exchange.
 // Buy limit at or above market price, or sell limit at or below market price → taker.
@@ -204,7 +214,7 @@ func (m *paperMatchingBook) buyToPrice(price fixedpoint.Value) []paperFill {
 			if o.Price.Compare(m.lastPrice) < 0 {
 				fillPrice = m.lastPrice
 			}
-			fills = append(fills, m.buildFillLocked(o, fillPrice))
+			fills = append(fills, m.buildFillLocked(o, fillPrice, false))
 		} else {
 			remainingAsk = append(remainingAsk, o)
 		}
@@ -227,7 +237,7 @@ func (m *paperMatchingBook) sellToPrice(price fixedpoint.Value) []paperFill {
 			if o.Price.Compare(m.lastPrice) > 0 {
 				fillPrice = m.lastPrice
 			}
-			fills = append(fills, m.buildFillLocked(o, fillPrice))
+			fills = append(fills, m.buildFillLocked(o, fillPrice, false))
 		} else {
 			remainingBid = append(remainingBid, o)
 		}
@@ -296,7 +306,7 @@ func (m *paperMatchingBook) checkStopTriggers(high, low fixedpoint.Value) []pape
 		order.ExecutedQuantity = order.Quantity
 		order.IsWorking = false
 		order.Price = fillPrice
-		fills = append(fills, m.buildFillLocked(order, fillPrice))
+		fills = append(fills, m.buildFillLocked(order, fillPrice, true))
 		log.Infof("[papertrade] STOP TRIGGERED: order=%d %s %s stop=%s fill=%s qty=%s",
 			order.OrderID, order.Side, order.Symbol, stopPrice.String(), fillPrice.String(), order.Quantity.String())
 	}
@@ -305,15 +315,11 @@ func (m *paperMatchingBook) checkStopTriggers(high, low fixedpoint.Value) []pape
 	return fills
 }
 
-func (m *paperMatchingBook) buildFillLocked(order types.Order, fillPrice fixedpoint.Value) paperFill {
+func (m *paperMatchingBook) buildFillLocked(order types.Order, fillPrice fixedpoint.Value, isTaker bool) paperFill {
 	now := types.Time(m.currentTime)
 	if time.Time(now).IsZero() {
 		now = types.Time(time.Now())
 	}
-
-	feeRate := fixedpoint.NewFromFloat(paperTradeFeeRate)
-	quoteQty := order.Quantity.Mul(fillPrice)
-	fee := quoteQty.Mul(feeRate)
 
 	isFutures := false
 	isMargin := false
@@ -321,6 +327,20 @@ func (m *paperMatchingBook) buildFillLocked(order types.Order, fillPrice fixedpo
 		isFutures = m.Parent.futuresSettings.IsFutures
 		isMargin = m.Parent.marginSettings.IsMargin
 	}
+
+	var feeRate fixedpoint.Value
+	switch {
+	case isFutures && isTaker:
+		feeRate = fixedpoint.NewFromFloat(paperFuturesTakerFeeRate)
+	case isFutures:
+		feeRate = fixedpoint.NewFromFloat(paperFuturesMakerFeeRate)
+	case isTaker:
+		feeRate = fixedpoint.NewFromFloat(paperSpotTakerFeeRate)
+	default:
+		feeRate = fixedpoint.NewFromFloat(paperSpotMakerFeeRate)
+	}
+	quoteQty := order.Quantity.Mul(fillPrice)
+	fee := quoteQty.Mul(feeRate)
 
 	trade := types.Trade{
 		ID:                 nextPaperTradeID(),
@@ -332,7 +352,7 @@ func (m *paperMatchingBook) buildFillLocked(order types.Order, fillPrice fixedpo
 		Quantity:           order.Quantity,
 		QuoteQuantity:      quoteQty,
 		IsBuyer:            order.Side == types.SideTypeBuy,
-		IsMaker:            true,
+		IsMaker:            !isTaker,
 		Fee:                fee,
 		FeeCurrency:        m.Market.QuoteCurrency,
 		StrategyInstanceID: order.StrategyInstanceID,
@@ -470,6 +490,23 @@ type PaperTradeExchange struct {
 	// Margin state per asset
 	marginSettings types.MarginSettings
 	marginStates   map[string]*paperMarginState
+
+	// OnPeriodicNAVRecord is fired every minute so the environment layer
+	// (which owns PriceSolver + AccountService) can persist a NAV snapshot.
+	// PaperTradeExchange itself cannot compute USD NAV — it lacks the
+	// price solver and the session reference. Without this ticker,
+	// nav_history_details stays empty for paper sessions and the equity
+	// curve has to be reconstructed from trades/profits only.
+	OnPeriodicNAVRecord func(time.Time)
+
+	// Persistence callbacks for margin/funding events. Set by the
+	// environment layer which owns MarginService. Without these,
+	// margin_loans/margin_repays/margin_interests tables stay empty
+	// for paper sessions and funding payments are invisible to PnL.
+	OnMarginLoan     func(types.MarginLoan)
+	OnMarginRepay    func(types.MarginRepay)
+	OnMarginInterest func(types.MarginInterest)
+	OnFundingPayment func(types.FundingPayment)
 }
 
 func NewPaperTradeExchange(inner types.Exchange, markets types.MarketMap, balances types.BalanceMap) *PaperTradeExchange {
@@ -563,6 +600,11 @@ func (e *PaperTradeExchange) RestoreFromDB(ctx context.Context) error {
 		log.Infof("paper trade: restored %d balances from DB", len(balances))
 	}
 
+	// Seed paper_balances on startup so the dashboard shows balances before
+	// the first trade fills. Without this, the table stays empty until an
+	// order triggers OnBalanceUpdate.
+	e.syncBalances()
+
 	// 2. Restore open orders.
 	orders, err := e.queryOpenOrders(ctx, "")
 	if err != nil {
@@ -581,11 +623,17 @@ func (e *PaperTradeExchange) RestoreFromDB(ctx context.Context) error {
 			continue
 		}
 		matching.mu.Lock()
-		switch order.Side {
-		case types.SideTypeBuy:
-			matching.bidOrders = append(matching.bidOrders, order)
-		case types.SideTypeSell:
-			matching.askOrders = append(matching.askOrders, order)
+		isStop := order.Type == types.OrderTypeStopLimit || order.Type == types.OrderTypeStopMarket ||
+			order.Type == types.OrderTypeTakeProfit || order.Type == types.OrderTypeTakeProfitMarket
+		if isStop {
+			matching.stopOrders = append(matching.stopOrders, order)
+		} else {
+			switch order.Side {
+			case types.SideTypeBuy:
+				matching.bidOrders = append(matching.bidOrders, order)
+			case types.SideTypeSell:
+				matching.askOrders = append(matching.askOrders, order)
+			}
 		}
 		matching.mu.Unlock()
 
@@ -676,8 +724,8 @@ func (e *PaperTradeExchange) queryBalances(ctx context.Context) (types.BalanceMa
 	var query string
 	var args []interface{}
 	if e.db.DriverName() == "postgres" {
-		query = "SELECT currency, available, locked FROM \"" + tableName + "\" WHERE user_id = $1"
-		args = append(args, e.userID)
+		query = "SELECT currency, available, locked FROM \"" + tableName + "\" WHERE user_id = $1 AND strategy_instance_id = $2"
+		args = append(args, e.userID, e.strategyInstance)
 	} else {
 		query = "SELECT currency, available, locked FROM " + tableName
 	}
@@ -720,9 +768,9 @@ func (e *PaperTradeExchange) restoreFuturesPositions(ctx context.Context) error 
 	} else {
 		query = `SELECT symbol, position_side, leverage, entry_price, position_amount, margin_asset, strategy_instance_id
 			FROM ` + tableName + `
-			WHERE position_amount != 0
-			GROUP BY symbol
-			HAVING gid = MAX(gid)`
+			WHERE position_amount != 0 AND rowid IN (
+				SELECT MAX(rowid) FROM ` + tableName + ` WHERE position_amount != 0 GROUP BY symbol
+			)`
 	}
 
 	rows, err := e.db.QueryxContext(ctx, query, args...)
@@ -758,11 +806,19 @@ func (e *PaperTradeExchange) restoreFuturesPositions(ctx context.Context) error 
 			lev = int(r.Leverage.Int64())
 		}
 
+		// Paper engine only supports one-way mode; coerce any legacy
+		// ''/Long/Short values to BOTH so a dirty DB snapshot cannot
+		// resurrect the bad state across restarts.
+		side := types.PositionType(r.PositionSide)
+		if side == "" || side == types.PositionLong || side == types.PositionShort {
+			side = types.PositionType(PositionModeOneWay)
+		}
+
 		state := &paperFuturesState{
 			Leverage:           lev,
 			PositionAmount:     r.PositionAmount,
 			EntryPrice:         r.EntryPrice,
-			PositionSide:       types.PositionType(r.PositionSide),
+			PositionSide:       side,
 			MarginAsset:        r.MarginAsset,
 			StrategyInstanceID: r.StrategyInstanceID,
 		}
@@ -796,9 +852,9 @@ func (e *PaperTradeExchange) upsertBalances() error {
 		var sql string
 		switch e.db.DriverName() {
 		case "postgres":
-			sql = `INSERT INTO "` + tableName + `" (user_id, currency, total, available, locked) VALUES ($1, $2, $3, $4, $5)
-				ON CONFLICT (user_id, currency) DO UPDATE SET total = $3, available = $4, locked = $5`
-			_, err := e.db.Exec(sql, e.userID, currency, b.Total().String(), b.Available.String(), b.Locked.String())
+			sql = `INSERT INTO "` + tableName + `" (user_id, strategy_instance_id, currency, total, available, locked) VALUES ($1, $2, $3, $4, $5, $6)
+				ON CONFLICT (user_id, strategy_instance_id, currency) DO UPDATE SET total = $4, available = $5, locked = $6`
+			_, err := e.db.Exec(sql, e.userID, e.strategyInstance, currency, b.Total().String(), b.Available.String(), b.Locked.String())
 			if err != nil {
 				return err
 			}
@@ -828,9 +884,9 @@ func (e *PaperTradeExchange) matchingBook(symbol string) (*paperMatchingBook, bo
 				m.OnTradeUpdate(e.userDataEmitter.EmitTradeUpdate)
 				m.OnOrderUpdate(e.userDataEmitter.EmitOrderUpdate)
 				m.OnBalanceUpdate(e.userDataEmitter.EmitBalanceUpdate)
-				if e.db != nil {
-					m.OnBalanceUpdate(func(types.BalanceMap) { e.syncBalances() })
-				}
+			}
+			if e.db != nil {
+				m.OnBalanceUpdate(func(types.BalanceMap) { e.syncBalances() })
 			}
 			e.matchingBooks[symbol] = m
 			ok = true
@@ -981,22 +1037,28 @@ func (e *PaperTradeExchange) SubmitOrder(ctx context.Context, submit types.Submi
 		}
 
 		matching.mu.Lock()
-		fill := matching.buildFillLocked(order, fillPrice)
+		fill := matching.buildFillLocked(order, fillPrice, true)
 		matching.mu.Unlock()
 
 		// For taker limit orders, refund the difference between locked and used
 		if submit.Type == types.OrderTypeLimit {
+			refunded := false
 			switch submit.Side {
 			case types.SideTypeBuy:
 				refund := price.Sub(fillPrice).Mul(submit.Quantity)
 				if refund.Sign() > 0 {
 					e.account.UnlockBalance(market.QuoteCurrency, refund)
+					refunded = true
 				}
 			case types.SideTypeSell:
 				refund := fillPrice.Sub(price).Mul(submit.Quantity)
 				if refund.Sign() > 0 {
 					e.account.AddBalance(market.QuoteCurrency, refund)
+					refunded = true
 				}
+			}
+			if refunded {
+				e.EmitBalanceUpdateFromAccount()
 			}
 		}
 
@@ -1068,17 +1130,146 @@ func (e *PaperTradeExchange) QueryOrder(ctx context.Context, q types.OrderQuery)
 }
 
 func (e *PaperTradeExchange) QueryOrderTrades(ctx context.Context, q types.OrderQuery) ([]types.Trade, error) {
-	return nil, nil
+	if e.db == nil || len(q.OrderID) == 0 {
+		return nil, nil
+	}
+	tableName := e.tableName("trades")
+	var query string
+	var args []interface{}
+	if e.db.DriverName() == "postgres" {
+		query = `SELECT CAST(id AS BIGINT) as id, CAST(order_id AS BIGINT) as order_id, exchange, symbol, price, quantity, quote_quantity, side, is_buyer, is_maker, fee, fee_currency, strategy_instance_id, traded_at FROM "` + tableName + `" WHERE user_id = $1`
+		args = append(args, e.userID)
+		if e.strategyInstance != "" {
+			query += " AND strategy_instance_id = $2"
+			args = append(args, e.strategyInstance)
+		}
+	} else {
+		query = "SELECT * FROM " + tableName + " WHERE 1=1"
+	}
+	// Use IN (...) so multiple order IDs are OR-matched. The previous loop
+	// chained `AND order_id = ?` per ID, which is unsatisfiable for >1 ID.
+	placeholders := make([]string, len(q.OrderID))
+	for i, oid := range q.OrderID {
+		if e.db.DriverName() == "postgres" {
+			placeholders[i] = "$" + strconv.Itoa(len(args)+1)
+		} else {
+			placeholders[i] = "?"
+		}
+		args = append(args, oid)
+	}
+	query += " AND order_id IN (" + strings.Join(placeholders, ", ") + ")"
+	rows, err := e.db.QueryxContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var trades []types.Trade
+	for rows.Next() {
+		var t types.Trade
+		if err := rows.StructScan(&t); err != nil {
+			return nil, err
+		}
+		trades = append(trades, t)
+	}
+	return trades, nil
 }
 
 // --- ExchangeTradeHistoryService ---
 
 func (e *PaperTradeExchange) QueryTrades(ctx context.Context, symbol string, options *types.TradeQueryOptions) ([]types.Trade, error) {
-	return nil, nil
+	if e.db == nil {
+		return nil, nil
+	}
+	tableName := e.tableName("trades")
+	var query string
+	var args []interface{}
+	if e.db.DriverName() == "postgres" {
+		query = `SELECT CAST(id AS BIGINT) as id, CAST(order_id AS BIGINT) as order_id, exchange, symbol, price, quantity, quote_quantity, side, is_buyer, is_maker, fee, fee_currency, strategy_instance_id, traded_at FROM "` + tableName + `" WHERE user_id = $1 AND symbol = $2`
+		args = append(args, e.userID, symbol)
+		if e.strategyInstance != "" {
+			query += " AND strategy_instance_id = $3"
+			args = append(args, e.strategyInstance)
+		}
+	} else {
+		query = "SELECT * FROM " + tableName + " WHERE symbol = ?"
+		args = append(args, symbol)
+	}
+	if options != nil && options.StartTime != nil {
+		if e.db.DriverName() == "postgres" {
+			nextIdx := len(args) + 1
+			query += " AND traded_at >= $" + strconv.Itoa(nextIdx)
+		} else {
+			query += " AND traded_at >= ?"
+		}
+		args = append(args, *options.StartTime)
+	}
+	query += " ORDER BY traded_at ASC"
+	rows, err := e.db.QueryxContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var trades []types.Trade
+	for rows.Next() {
+		var t types.Trade
+		if err := rows.StructScan(&t); err != nil {
+			return nil, err
+		}
+		trades = append(trades, t)
+	}
+	return trades, nil
 }
 
 func (e *PaperTradeExchange) QueryClosedOrders(ctx context.Context, symbol string, since, until time.Time, lastOrderID uint64) ([]types.Order, error) {
-	return nil, nil
+	if e.db == nil {
+		return nil, nil
+	}
+	tableName := e.tableName("orders")
+	var query string
+	var args []interface{}
+	if e.db.DriverName() == "postgres" {
+		query = `SELECT exchange, CAST(order_id AS BIGINT) as order_id, client_order_id, order_type, status, symbol, price, stop_price, quantity, executed_quantity, side, is_working, time_in_force, created_at, updated_at, is_margin, is_futures, is_isolated, order_uuid as uuid, actual_order_id, strategy_instance_id FROM "` + tableName + `" WHERE user_id = $1 AND status IN ('FILLED', 'CANCELED', 'EXPIRED', 'REJECTED')`
+		args = append(args, e.userID)
+		if e.strategyInstance != "" {
+			query += " AND strategy_instance_id = $2"
+			args = append(args, e.strategyInstance)
+		}
+	} else {
+		query = "SELECT * FROM " + tableName + " WHERE status IN ('FILLED', 'CANCELED', 'EXPIRED', 'REJECTED')"
+	}
+	if symbol != "" {
+		if e.db.DriverName() == "postgres" {
+			nextIdx := len(args) + 1
+			query += " AND symbol = $" + strconv.Itoa(nextIdx)
+		} else {
+			query += " AND symbol = ?"
+		}
+		args = append(args, symbol)
+	}
+	if lastOrderID > 0 {
+		if e.db.DriverName() == "postgres" {
+			nextIdx := len(args) + 1
+			query += " AND order_id > $" + strconv.Itoa(nextIdx)
+		} else {
+			query += " AND order_id > ?"
+		}
+		args = append(args, lastOrderID)
+	}
+	query += " ORDER BY order_id ASC"
+	rows, err := e.db.QueryxContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var orders []types.Order
+	for rows.Next() {
+		var o types.Order
+		if err := rows.StructScan(&o); err != nil {
+			return nil, err
+		}
+		orders = append(orders, o)
+	}
+	return orders, nil
 }
 
 // --- DefaultFeeRates ---

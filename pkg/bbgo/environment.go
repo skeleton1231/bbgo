@@ -544,7 +544,7 @@ func (environ *Environment) BindSync(config *SyncConfig) {
 	}
 
 	// setup the futures position sync interval
-	if environ.SyncService != nil && environ.SyncService.FuturesService != nil {
+	if environ.SyncService != nil && environ.SyncService.FuturesService != nil && config.UserDataStream != nil {
 		environ.SyncService.FuturesService.PositionRiskUpdateInterval = config.UserDataStream.FuturesPositionSyncInterval.Duration()
 	}
 

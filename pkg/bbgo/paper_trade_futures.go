@@ -129,7 +129,6 @@ func (e *PaperTradeExchange) QueryPositionRisk(ctx context.Context, symbol ...st
 
 func (e *PaperTradeExchange) BorrowMarginAsset(ctx context.Context, asset string, amount fixedpoint.Value) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 
 	state := e.getOrCreateMarginState(asset)
 	state.Borrowed = state.Borrowed.Add(amount)
@@ -140,18 +139,34 @@ func (e *PaperTradeExchange) BorrowMarginAsset(ctx context.Context, asset string
 	e.account.AddBalance(asset, amount)
 	e.EmitBalanceUpdateFromAccount()
 
+	var loanEvt *types.MarginLoan
+	if e.OnMarginLoan != nil {
+		loanEvt = &types.MarginLoan{
+			TransactionID: nextPaperOrderID(),
+			Exchange:      e.inner.Name(),
+			Asset:         asset,
+			Principle:     amount,
+			Time:          types.Time(time.Now()),
+		}
+	}
+	e.mu.Unlock()
+
+	if loanEvt != nil {
+		e.OnMarginLoan(*loanEvt)
+	}
 	return nil
 }
 
 func (e *PaperTradeExchange) RepayMarginAsset(ctx context.Context, asset string, amount fixedpoint.Value) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 
 	state, ok := e.marginStates[asset]
 	if !ok {
+		e.mu.Unlock()
 		return fmt.Errorf("paper trade: no margin debt for asset %s", asset)
 	}
 	if state.Borrowed.Compare(amount) < 0 {
+		e.mu.Unlock()
 		return fmt.Errorf("paper trade: repay amount %s exceeds borrowed %s for asset %s",
 			amount.String(), state.Borrowed.String(), asset)
 	}
@@ -164,6 +179,21 @@ func (e *PaperTradeExchange) RepayMarginAsset(ctx context.Context, asset string,
 	e.account.AddBalance(asset, amount.Neg())
 	e.EmitBalanceUpdateFromAccount()
 
+	var repayEvt *types.MarginRepay
+	if e.OnMarginRepay != nil {
+		repayEvt = &types.MarginRepay{
+			TransactionID: nextPaperOrderID(),
+			Exchange:      e.inner.Name(),
+			Asset:         asset,
+			Principle:     amount,
+			Time:          types.Time(time.Now()),
+		}
+	}
+	e.mu.Unlock()
+
+	if repayEvt != nil {
+		e.OnMarginRepay(*repayEvt)
+	}
 	return nil
 }
 
@@ -397,23 +427,43 @@ func (e *PaperTradeExchange) updateFuturesPositionLocked(symbol string, side typ
 
 // updateMarginInterest accrues simulated interest on borrowed assets.
 func (e *PaperTradeExchange) updateMarginInterest() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	var events []types.MarginInterest
+	func() {
+		e.mu.Lock()
+		defer e.mu.Unlock()
 
-	now := time.Now()
-	for _, state := range e.marginStates {
-		if state.Borrowed.IsZero() || state.LastAccrual.IsZero() {
-			continue
+		now := time.Now()
+		for asset, state := range e.marginStates {
+			if state.Borrowed.IsZero() || state.LastAccrual.IsZero() {
+				continue
+			}
+
+			hours := now.Sub(state.LastAccrual).Hours()
+			if hours < 1.0 {
+				continue
+			}
+
+			accruedInterest := state.Borrowed.Mul(state.InterestRate).Mul(fixedpoint.NewFromFloat(hours))
+			state.Interest = state.Interest.Add(accruedInterest)
+			state.LastAccrual = now
+
+			if e.OnMarginInterest != nil {
+				events = append(events, types.MarginInterest{
+					Exchange:     e.inner.Name(),
+					Asset:        asset,
+					Principle:    state.Borrowed,
+					Interest:     accruedInterest,
+					InterestRate: state.InterestRate,
+					Time:         types.Time(now),
+				})
+			}
 		}
+	}()
 
-		hours := now.Sub(state.LastAccrual).Hours()
-		if hours < 1.0 {
-			continue
+	if e.OnMarginInterest != nil {
+		for _, evt := range events {
+			e.OnMarginInterest(evt)
 		}
-
-		accruedInterest := state.Borrowed.Mul(state.InterestRate).Mul(fixedpoint.NewFromFloat(hours))
-		state.Interest = state.Interest.Add(accruedInterest)
-		state.LastAccrual = now
 	}
 }
 
@@ -433,8 +483,8 @@ func (e *PaperTradeExchange) StartMarginInterestTimer(ctx context.Context) {
 	}()
 }
 
-// StartBackgroundServices starts background tasks for margin interest accrual
-// and futures funding rate simulation.
+// StartBackgroundServices starts background tasks for margin interest accrual,
+// futures funding rate simulation, and periodic NAV snapshot recording.
 func (e *PaperTradeExchange) StartBackgroundServices(ctx context.Context) {
 	if e.marginSettings.IsMargin {
 		e.StartMarginInterestTimer(ctx)
@@ -442,52 +492,93 @@ func (e *PaperTradeExchange) StartBackgroundServices(ctx context.Context) {
 	if e.futuresSettings.IsFutures {
 		e.StartFundingRateTimer(ctx)
 	}
+	if e.OnPeriodicNAVRecord != nil {
+		go e.runNAVTicker(ctx)
+	}
+}
+
+// runNAVTicker fires OnPeriodicNAVRecord every minute so the environment
+// can persist a NAV snapshot for equity curve reconstruction.
+func (e *PaperTradeExchange) runNAVTicker(ctx context.Context) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case t := <-ticker.C:
+			e.OnPeriodicNAVRecord(t)
+		}
+	}
 }
 
 // applyFundingRate applies funding rate payments to all open futures positions.
 // Positive rate: longs pay shorts. Negative rate: shorts pay longs.
 // Funding = position_amount × mark_price × funding_rate
 func (e *PaperTradeExchange) applyFundingRate() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	var events []types.FundingPayment
+	func() {
+		e.mu.Lock()
+		defer e.mu.Unlock()
 
-	now := time.Now()
-	rate := fixedpoint.MustNewFromString(defaultFundingRate)
+		now := time.Now()
+		rate := fixedpoint.MustNewFromString(defaultFundingRate)
 
-	for symbol, state := range e.futuresStates {
-		if state.PositionAmount.IsZero() {
-			continue
+		for symbol, state := range e.futuresStates {
+			if state.PositionAmount.IsZero() {
+				continue
+			}
+			if !state.LastFundingTime.IsZero() && now.Sub(state.LastFundingTime) < fundingInterval {
+				continue
+			}
+
+			var markPrice fixedpoint.Value
+			if book, ok := e.matchingBooks[symbol]; ok {
+				markPrice = book.lastPrice
+			}
+			if markPrice.IsZero() {
+				markPrice = state.EntryPrice
+			}
+
+			notional := state.PositionAmount.Abs().Mul(markPrice)
+			fundingAmount := notional.Mul(rate)
+
+			asset := state.MarginAsset
+			if asset == "" {
+				asset = "USDT"
+			}
+
+			// Longs pay (negative), shorts receive (positive) when rate > 0
+			var signedFunding fixedpoint.Value
+			if state.PositionAmount.Sign() > 0 {
+				signedFunding = fundingAmount.Neg()
+				e.account.AddBalance(asset, signedFunding)
+			} else {
+				signedFunding = fundingAmount
+				e.account.AddBalance(asset, signedFunding)
+			}
+
+			state.LastFundingTime = now
+
+			if e.OnFundingPayment != nil {
+				events = append(events, types.FundingPayment{
+					Exchange: e.inner.Name(),
+					Symbol:   symbol,
+					Asset:    asset,
+					Amount:   signedFunding,
+					Rate:     rate,
+					Time:     types.Time(now),
+				})
+			}
+			log.Infof("paper trade: funding rate applied for %s — notional=%s rate=%s funding=%s %s (position_side=%s)",
+				symbol, notional.String(), rate.String(), fundingAmount.String(), asset, state.PositionSide)
 		}
-		if !state.LastFundingTime.IsZero() && now.Sub(state.LastFundingTime) < fundingInterval {
-			continue
-		}
+	}()
 
-		var markPrice fixedpoint.Value
-		if book, ok := e.matchingBooks[symbol]; ok {
-			markPrice = book.lastPrice
+	if e.OnFundingPayment != nil {
+		for _, evt := range events {
+			e.OnFundingPayment(evt)
 		}
-		if markPrice.IsZero() {
-			markPrice = state.EntryPrice
-		}
-
-		notional := state.PositionAmount.Abs().Mul(markPrice)
-		fundingAmount := notional.Mul(rate)
-
-		asset := state.MarginAsset
-		if asset == "" {
-			asset = "USDT"
-		}
-
-		// Longs pay (negative), shorts receive (positive) when rate > 0
-		if state.PositionAmount.Sign() > 0 {
-			e.account.AddBalance(asset, fundingAmount.Neg())
-		} else {
-			e.account.AddBalance(asset, fundingAmount)
-		}
-
-		state.LastFundingTime = now
-		log.Infof("paper trade: funding rate applied for %s — notional=%s rate=%s funding=%s %s (position_side=%s)",
-			symbol, notional.String(), rate.String(), fundingAmount.String(), asset, state.PositionSide)
 	}
 }
 
