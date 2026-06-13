@@ -2,6 +2,7 @@ package bbgo
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"hash/fnv"
 	"os"
@@ -386,6 +387,10 @@ func (m *paperMatchingBook) buildFillLocked(order types.Order, fillPrice fixedpo
 	// Lock ordering: m.mu -> e.mu is safe; no reverse path exists.
 	if m.Parent != nil && isFutures {
 		m.Parent.mu.Lock()
+		realizedPnL := m.Parent.computeRealizedPnLLocked(order.Symbol, order.Side, fillPrice, order.Quantity)
+		if realizedPnL != 0.0 {
+			trade.PnL = sql.NullFloat64{Float64: realizedPnL, Valid: true}
+		}
 		m.Parent.updateFuturesPositionLocked(order.Symbol, order.Side, fillPrice, order.Quantity, order.StrategyInstanceID)
 		m.Parent.mu.Unlock()
 	}

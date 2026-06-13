@@ -352,6 +352,29 @@ func (e *PaperTradeExchange) computePositionRiskLocked(symbol string) types.Posi
 	}
 }
 
+// computeRealizedPnLLocked returns the realized PnL for a fill that reduces
+// an existing position. Opening/adding trades return zero.
+// Long reduced by SELL: (fillPrice - entryPrice) * min(posQty, sellQty)
+// Short reduced by BUY: (entryPrice - fillPrice) * min(|posQty|, buyQty)
+// Must be called with e.mu held.
+func (e *PaperTradeExchange) computeRealizedPnLLocked(symbol string, side types.SideType, fillPrice, quantity fixedpoint.Value) float64 {
+	state, ok := e.futuresStates[symbol]
+	if !ok || state.PositionAmount.IsZero() {
+		return 0.0
+	}
+
+	switch {
+	case state.PositionAmount.Sign() > 0 && side == types.SideTypeSell:
+		reducingQty := fixedpoint.Min(state.PositionAmount, quantity)
+		return fillPrice.Sub(state.EntryPrice).Mul(reducingQty).Float64()
+	case state.PositionAmount.Sign() < 0 && side == types.SideTypeBuy:
+		reducingQty := fixedpoint.Min(state.PositionAmount.Abs(), quantity)
+		return state.EntryPrice.Sub(fillPrice).Mul(reducingQty).Float64()
+	default:
+		return 0.0
+	}
+}
+
 // updateFuturesPositionLocked updates the futures state after a fill.
 // Must be called with e.mu held (caller acquires it around this call).
 func (e *PaperTradeExchange) updateFuturesPositionLocked(symbol string, side types.SideType, price, quantity fixedpoint.Value, strategyInstanceID string) {
