@@ -213,27 +213,33 @@ func New(key, secret string, args ...string) *Exchange {
 		futuresClient2: futuresClient2,
 	}
 
-	if (len(key) > 0 && len(secret) > 0) || len(ed25519PrivateKey) > 0 {
+	hasCredentials := (len(key) > 0 && len(secret) > 0) || len(ed25519PrivateKey) > 0
+	if hasCredentials {
 		client2.Auth(key, secret, ed25519PrivateKey)
 		futuresClient2.Auth(key, secret, ed25519PrivateKey)
 	}
 
-	ctx := context.Background()
-	go timeSetterOnce.Do(func() {
-		ex.setServerTimeOffset(ctx)
+	// Server time offset is only used to sign authenticated requests (the "timestamp" param).
+	// Public-only exchanges (e.g. paper trade with publicOnly: true) never authenticate, so skip
+	// the hourly sync to avoid noisy EOF errors when the container has no proxy to binance.
+	if hasCredentials {
+		ctx := context.Background()
+		go timeSetterOnce.Do(func() {
+			ex.setServerTimeOffset(ctx)
 
-		ticker := time.NewTicker(time.Hour)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
+			ticker := time.NewTicker(time.Hour)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
 
-			case <-ticker.C:
-				ex.setServerTimeOffset(ctx)
+				case <-ticker.C:
+					ex.setServerTimeOffset(ctx)
+				}
 			}
-		}
-	})
+		})
+	}
 
 	return ex
 }
