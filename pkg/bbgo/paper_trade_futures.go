@@ -13,8 +13,7 @@ import (
 const (
 	defaultMaintMarginRate  = "0.005"
 	defaultHourlyMarginRate = "0.0001"
-	defaultFundingRate      = "0.0001" // 0.01% per 8h — typical Binance perpetual rate
-	fundingInterval         = 8 * time.Hour
+	defaultFundingRate = "0.0001" // 0.01% per 8h — typical Binance perpetual rate
 )
 
 // PositionModeOneWay is the one-way futures position mode (Binance positionSide=BOTH).
@@ -535,9 +534,22 @@ func (e *PaperTradeExchange) runNAVTicker(ctx context.Context) {
 	}
 }
 
+// fundingScheduleHours are the UTC hours at which perpetual exchanges settle funding.
+var fundingScheduleHours = []int{0, 8, 16}
+
+// lastFundingSlotUTC returns the most recent funding settlement time at or before t.
+// Real perpetual exchanges (Binance) settle funding at UTC 00:00, 08:00, 16:00.
+func lastFundingSlotUTC(t time.Time) time.Time {
+	utc := t.UTC()
+	h := utc.Hour()
+	slot := (h / 8) * 8
+	return time.Date(utc.Year(), utc.Month(), utc.Day(), slot, 0, 0, 0, time.UTC)
+}
+
 // applyFundingRate applies funding rate payments to all open futures positions.
 // Positive rate: longs pay shorts. Negative rate: shorts pay longs.
 // Funding = position_amount × mark_price × funding_rate
+// Settled on UTC 00/08/16 boundaries to match real exchange behavior.
 func (e *PaperTradeExchange) applyFundingRate() {
 	var events []types.FundingPayment
 	func() {
@@ -545,13 +557,14 @@ func (e *PaperTradeExchange) applyFundingRate() {
 		defer e.mu.Unlock()
 
 		now := time.Now()
+		slot := lastFundingSlotUTC(now)
 		rate := fixedpoint.MustNewFromString(defaultFundingRate)
 
 		for symbol, state := range e.futuresStates {
 			if state.PositionAmount.IsZero() {
 				continue
 			}
-			if !state.LastFundingTime.IsZero() && now.Sub(state.LastFundingTime) < fundingInterval {
+			if !state.LastFundingTime.IsZero() && !state.LastFundingTime.Before(slot) {
 				continue
 			}
 
@@ -581,7 +594,7 @@ func (e *PaperTradeExchange) applyFundingRate() {
 				e.account.AddBalance(asset, signedFunding)
 			}
 
-			state.LastFundingTime = now
+			state.LastFundingTime = slot
 
 			if e.OnFundingPayment != nil {
 				events = append(events, types.FundingPayment{
@@ -590,7 +603,7 @@ func (e *PaperTradeExchange) applyFundingRate() {
 					Asset:    asset,
 					Amount:   signedFunding,
 					Rate:     rate,
-					Time:     types.Time(now),
+					Time:     types.Time(slot),
 				})
 			}
 			log.Infof("paper trade: funding rate applied for %s — notional=%s rate=%s funding=%s %s (position_side=%s)",
