@@ -1061,6 +1061,29 @@ func (e *PaperTradeExchange) SubmitOrder(ctx context.Context, submit types.Submi
 		return nil, fmt.Errorf("paper trade: order quantity must be positive")
 	}
 
+	if submit.ReduceOnly && (e.futuresSettings.IsFutures || e.marginSettings.IsMargin) {
+		e.mu.Lock()
+		state := e.getOrCreateFuturesState(submit.Symbol)
+		posAmt := state.PositionAmount
+		e.mu.Unlock()
+
+		if posAmt.IsZero() {
+			return nil, fmt.Errorf("paper trade: reduceOnly order rejected — no open position for %s", submit.Symbol)
+		}
+
+		canReduce := (posAmt.Sign() > 0 && submit.Side == types.SideTypeSell) ||
+			(posAmt.Sign() < 0 && submit.Side == types.SideTypeBuy)
+
+		if !canReduce {
+			return nil, fmt.Errorf("paper trade: reduceOnly order rejected — %s %s would increase position (current: %s)",
+				submit.Side, submit.Symbol, posAmt.String())
+		}
+
+		if submit.Quantity.Compare(posAmt.Abs()) > 0 {
+			submit.Quantity = posAmt.Abs()
+		}
+	}
+
 	orderID := nextPaperOrderID()
 	now := types.Time(time.Now())
 
