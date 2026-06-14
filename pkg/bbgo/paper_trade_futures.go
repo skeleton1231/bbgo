@@ -198,7 +198,7 @@ func (e *PaperTradeExchange) RepayMarginAsset(ctx context.Context, asset string,
 	}
 	e.mu.Unlock()
 
-	if interestEvt != nil {
+	if interestEvt != nil && e.OnMarginInterest != nil {
 		e.OnMarginInterest(*interestEvt)
 	}
 	if repayEvt != nil {
