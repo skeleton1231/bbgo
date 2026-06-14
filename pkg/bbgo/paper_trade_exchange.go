@@ -204,6 +204,10 @@ type paperFill struct {
 	Trade    types.Trade
 	Order    types.Order
 	Balances types.BalanceMap
+	// Canceled marks a cancel-only fill (e.g. ReduceOnly order canceled at fill
+	// time). emitFills skips TradeUpdate emission for these so the SaaS pipeline
+	// doesn't see phantom zero-quantity trades.
+	Canceled bool
 }
 
 // checkLiquidation force-closes a futures position when the kline's price
@@ -233,12 +237,15 @@ func (m *paperMatchingBook) checkLiquidation(kline types.KLine) *paperFill {
 
 	var shouldLiquidate bool
 	var closeSide types.SideType
+	var positionAction string
 	if state.PositionAmount.Sign() > 0 {
 		shouldLiquidate = kline.Low.Compare(liqPrice) <= 0
 		closeSide = types.SideTypeSell
+		positionAction = types.PositionActionCloseLong
 	} else {
 		shouldLiquidate = kline.High.Compare(liqPrice) >= 0
 		closeSide = types.SideTypeBuy
+		positionAction = types.PositionActionCloseShort
 	}
 
 	if !shouldLiquidate {
@@ -258,6 +265,38 @@ func (m *paperMatchingBook) checkLiquidation(kline types.KLine) *paperFill {
 
 	quoteQty := closeQty.Mul(liqPrice)
 	fee := quoteQty.Mul(fixedpoint.NewFromFloat(paperFuturesTakerFeeRate))
+
+	// Apply the position-closing effect to the wallet. Without this, the base
+	// currency held/owed and the quote currency paid/received at liquidation
+	// never hit the balance — the SaaS dashboard would show a stale wallet
+	// alongside a zero position, and the originally-locked margin stays locked
+	// forever.
+	asset := state.MarginAsset
+	if asset == "" {
+		asset = m.Market.QuoteCurrency
+	}
+	if closeSide == types.SideTypeSell {
+		// Long liquidated → sell the held base back at liqPrice.
+		m.Account.AddBalance(m.Market.BaseCurrency, closeQty.Neg())
+		m.Account.AddBalance(asset, quoteQty.Sub(fee))
+	} else {
+		// Short liquidated → buy back the owed base at liqPrice.
+		m.Account.AddBalance(m.Market.BaseCurrency, closeQty)
+		m.Account.AddBalance(asset, quoteQty.Neg().Sub(fee))
+	}
+	// Release the initial margin locked when the position was opened.
+	leverage := state.Leverage
+	if leverage <= 0 {
+		leverage = 1
+	}
+	marginLocked := closeQty.Mul(entryPrice).Div(fixedpoint.NewFromInt(int64(leverage)))
+	if marginLocked.Sign() > 0 {
+		if err := m.Account.UnlockBalance(asset, marginLocked); err != nil {
+			log.WithError(err).Errorf("[papertrade] LIQUIDATION unlock margin failed: symbol=%s asset=%s wanted=%s (possible prior balance corruption)",
+				kline.Symbol, asset, marginLocked.String())
+		}
+	}
+
 	orderID := nextPaperOrderID()
 
 	trade := types.Trade{
@@ -276,6 +315,7 @@ func (m *paperMatchingBook) checkLiquidation(kline types.KLine) *paperFill {
 		StrategyInstanceID: state.StrategyInstanceID,
 		Time:               now,
 		IsFutures:          true,
+		PositionAction:     positionAction,
 	}
 	if realizedPnL != 0.0 {
 		trade.PnL = sql.NullFloat64{Float64: realizedPnL, Valid: true}
@@ -289,6 +329,7 @@ func (m *paperMatchingBook) checkLiquidation(kline types.KLine) *paperFill {
 			Price:        liqPrice,
 			Quantity:     closeQty,
 			AveragePrice: liqPrice,
+			PositionAction: positionAction,
 		},
 		Exchange:           m.Parent.inner.Name(),
 		OrderID:            orderID,
@@ -356,8 +397,16 @@ func (m *paperMatchingBook) sellToPrice(price fixedpoint.Value) []paperFill {
 }
 
 // emitFills emits all fill callbacks outside the lock.
+// Cancel-only fills (ReduceOnly orders canceled at fill time) are flagged via
+// paperFill.Canceled — we skip trade emission for those so the SaaS pipeline
+// doesn't see phantom zero-quantity trades.
 func (m *paperMatchingBook) emitFills(fills []paperFill) {
 	for _, f := range fills {
+		if f.Canceled {
+			m.EmitOrderUpdate(f.Order)
+			m.EmitBalanceUpdate(f.Balances)
+			continue
+		}
 		m.EmitTradeUpdate(f.Trade)
 		m.EmitOrderUpdate(f.Order)
 		m.EmitBalanceUpdate(f.Balances)
@@ -415,12 +464,48 @@ func (m *paperMatchingBook) checkStopTriggers(high, low fixedpoint.Value) []pape
 		order.IsWorking = false
 		order.Price = fillPrice
 		fills = append(fills, m.buildFillLocked(order, fillPrice, true))
+		// Release the margin that was locked when the stop was placed.
+		// buildFillLocked's UseLockedBalance call tries to consume the full
+		// notional, which silently fails for futures/margin stops (only
+		// stopPrice*qty/leverage was locked at submit). Without this unlock,
+		// every triggered stop leaves its margin permanently locked.
+		if m.Parent != nil && (m.Parent.futuresSettings.IsFutures || m.Parent.marginSettings.IsMargin) {
+			if order.Side == types.SideTypeSell {
+				m.unlockMarginSell(order, stopPrice)
+			} else {
+				leverage := m.Parent.effectiveLeverage(order.Symbol)
+				if leverage.Sign() > 0 {
+					marginLocked := order.Quantity.Mul(stopPrice).Div(leverage)
+					if marginLocked.Sign() > 0 {
+						m.Account.UnlockBalance(m.Market.QuoteCurrency, marginLocked)
+					}
+				}
+			}
+		}
 		log.Infof("[papertrade] STOP TRIGGERED: order=%d %s %s stop=%s fill=%s qty=%s",
 			order.OrderID, order.Side, order.Symbol, stopPrice.String(), fillPrice.String(), order.Quantity.String())
 	}
 
 	m.stopOrders = remaining
 	return fills
+}
+
+// reduceOnlyCancelFillLocked builds a cancel-only paperFill for a ReduceOnly
+// order that cannot be filled (position gone or would flip direction). The
+// Canceled flag signals to emitFills that no trade should be emitted.
+func (m *paperMatchingBook) reduceOnlyCancelFillLocked(order types.Order, reason string) paperFill {
+	canceled := order
+	canceled.Status = types.OrderStatusCanceled
+	canceled.IsWorking = false
+	canceled.UpdateTime = types.Time(time.Now())
+	log.Infof("[papertrade] REDUCE-ONLY CANCELED: order=%d %s %s — %s",
+		canceled.OrderID, canceled.Side, canceled.Symbol, reason)
+	return paperFill{
+		Trade:    types.Trade{},
+		Order:    canceled,
+		Balances: m.Account.Balances(),
+		Canceled: true,
+	}
 }
 
 func (m *paperMatchingBook) buildFillLocked(order types.Order, fillPrice fixedpoint.Value, isTaker bool) paperFill {
@@ -434,6 +519,36 @@ func (m *paperMatchingBook) buildFillLocked(order types.Order, fillPrice fixedpo
 	if m.Parent != nil {
 		isFutures = m.Parent.futuresSettings.IsFutures
 		isMargin = m.Parent.marginSettings.IsMargin
+	}
+
+	// Re-validate ReduceOnly at fill time. The position may have changed between
+	// SubmitOrder and fill (e.g., another order closed it). Real exchanges
+	// cancel ReduceOnly orders that would flip the position; without this,
+	// SaaS users testing stop-loss strategies in paper mode see different
+	// behavior than live.
+	//
+	// Note: this block and the futures-state update below both acquire
+	// m.Parent.mu separately. They cannot be combined because this check
+	// may early-return (cancel), skipping the later update. Lock order
+	// m.mu -> m.Parent.mu is the documented safe direction; no reverse
+	// path exists.
+	if m.Parent != nil && order.ReduceOnly && (isFutures || isMargin) {
+		m.Parent.mu.Lock()
+		state := m.Parent.getOrCreateFuturesState(order.Symbol)
+		posAmt := state.PositionAmount
+		m.Parent.mu.Unlock()
+
+		if posAmt.IsZero() {
+			return m.reduceOnlyCancelFillLocked(order, "position closed before fill")
+		}
+		canReduce := (posAmt.Sign() > 0 && order.Side == types.SideTypeSell) ||
+			(posAmt.Sign() < 0 && order.Side == types.SideTypeBuy)
+		if !canReduce {
+			return m.reduceOnlyCancelFillLocked(order, "would flip position direction")
+		}
+		if order.Quantity.Compare(posAmt.Abs()) > 0 {
+			order.Quantity = posAmt.Abs()
+		}
 	}
 
 	var feeRate fixedpoint.Value
@@ -467,6 +582,7 @@ func (m *paperMatchingBook) buildFillLocked(order types.Order, fillPrice fixedpo
 		Time:               now,
 		IsFutures:          isFutures,
 		IsMargin:           isMargin,
+		IsIsolated:         (m.Parent != nil && (m.Parent.futuresSettings.IsIsolatedFutures || m.Parent.marginSettings.IsIsolatedMargin)),
 	}
 
 	switch order.Side {
@@ -494,12 +610,21 @@ func (m *paperMatchingBook) buildFillLocked(order types.Order, fillPrice fixedpo
 	// Lock ordering: m.mu -> e.mu is safe; no reverse path exists.
 	if m.Parent != nil && isFutures {
 		m.Parent.mu.Lock()
+		state, ok := m.Parent.futuresStates[order.Symbol]
+		var baseBefore fixedpoint.Value
+		if ok {
+			baseBefore = state.PositionAmount
+		}
 		realizedPnL := m.Parent.computeRealizedPnLLocked(order.Symbol, order.Side, fillPrice, order.Quantity)
 		if realizedPnL != 0.0 {
 			trade.PnL = sql.NullFloat64{Float64: realizedPnL, Valid: true}
 		}
 		m.Parent.updateFuturesPositionLocked(order.Symbol, order.Side, fillPrice, order.Quantity, order.StrategyInstanceID)
 		m.Parent.mu.Unlock()
+		// Compute position action from the state BEFORE this trade so the SaaS
+		// frontend and downstream trade collectors can distinguish opens / adds /
+		// reduces / closes / flips without re-deriving from position history.
+		trade.PositionAction = types.ComputePositionActionFromState(baseBefore, order.Side, order.Quantity, true)
 	}
 
 	filled := order
@@ -508,11 +633,35 @@ func (m *paperMatchingBook) buildFillLocked(order types.Order, fillPrice fixedpo
 	filled.AveragePrice = fillPrice
 	filled.IsWorking = false
 	filled.UpdateTime = now
+	filled.PositionAction = trade.PositionAction
 
 	return paperFill{
 		Trade:    trade,
 		Order:    filled,
 		Balances: m.Account.Balances(),
+	}
+}
+
+// unlockMarginSell releases whatever the submit path locked for a futures/margin
+// SELL order. Submit locks base when the user has it; otherwise locks quote
+// (margin for a short). Mirroring that branch here prevents stranded balances
+// when the user closes a base-held position via SELL.
+func (m *paperMatchingBook) unlockMarginSell(order types.Order, price fixedpoint.Value) {
+	if m.Parent == nil || !(m.Parent.futuresSettings.IsFutures || m.Parent.marginSettings.IsMargin) {
+		return
+	}
+	baseBal, _ := m.Account.Balance(m.Market.BaseCurrency)
+	if baseBal.Locked.Compare(order.Quantity) >= 0 {
+		_ = m.Account.UnlockBalance(m.Market.BaseCurrency, order.Quantity)
+		return
+	}
+	leverage := m.Parent.effectiveLeverage(order.Symbol)
+	if leverage.Sign() <= 0 {
+		return
+	}
+	marginLocked := order.Quantity.Mul(price).Div(leverage)
+	if marginLocked.Sign() > 0 {
+		_ = m.Account.UnlockBalance(m.Market.QuoteCurrency, marginLocked)
 	}
 }
 
@@ -530,9 +679,13 @@ func (m *paperMatchingBook) CancelOrder(order types.Order) {
 			if o.OrderID == order.OrderID {
 				// Unlock the margin that was locked when the stop was placed
 				if m.Parent != nil && (m.Parent.futuresSettings.IsFutures || m.Parent.marginSettings.IsMargin) {
-					leverage := m.Parent.effectiveLeverage(order.Symbol)
-					lockAmt := order.Quantity.Mul(order.StopPrice).Div(leverage)
-					m.Account.UnlockBalance(m.Market.QuoteCurrency, lockAmt)
+					if order.Side == types.SideTypeSell {
+						m.unlockMarginSell(order, order.StopPrice)
+					} else {
+						leverage := m.Parent.effectiveLeverage(order.Symbol)
+						lockAmt := order.Quantity.Mul(order.StopPrice).Div(leverage)
+						m.Account.UnlockBalance(m.Market.QuoteCurrency, lockAmt)
+					}
 				} else if order.Side == types.SideTypeBuy {
 					m.Account.UnlockBalance(m.Market.QuoteCurrency, order.Price.Mul(order.Quantity))
 				} else {
@@ -549,7 +702,16 @@ func (m *paperMatchingBook) CancelOrder(order types.Order) {
 			var remaining []types.Order
 			for _, o := range m.bidOrders {
 				if o.OrderID == order.OrderID {
-					m.Account.UnlockBalance(m.Market.QuoteCurrency, o.Price.Mul(o.Quantity))
+					if m.Parent != nil && (m.Parent.futuresSettings.IsFutures || m.Parent.marginSettings.IsMargin) {
+						// Futures/margin buy locks notional/leverage at submit; unlocking the full
+						// notional here would inflate available balance by (leverage-1)/leverage.
+						leverage := m.Parent.effectiveLeverage(o.Symbol)
+						if leverage > 0 {
+							m.Account.UnlockBalance(m.Market.QuoteCurrency, o.Price.Mul(o.Quantity).Div(leverage))
+						}
+					} else {
+						m.Account.UnlockBalance(m.Market.QuoteCurrency, o.Price.Mul(o.Quantity))
+					}
 					continue
 				}
 				remaining = append(remaining, o)
@@ -560,7 +722,11 @@ func (m *paperMatchingBook) CancelOrder(order types.Order) {
 			var remaining []types.Order
 			for _, o := range m.askOrders {
 				if o.OrderID == order.OrderID {
-					m.Account.UnlockBalance(m.Market.BaseCurrency, o.Quantity)
+					if m.Parent != nil && (m.Parent.futuresSettings.IsFutures || m.Parent.marginSettings.IsMargin) {
+						m.unlockMarginSell(o, o.Price)
+					} else {
+						m.Account.UnlockBalance(m.Market.BaseCurrency, o.Quantity)
+					}
 					continue
 				}
 				remaining = append(remaining, o)
@@ -688,10 +854,14 @@ func (e *PaperTradeExchange) SetDB(db *sqlx.DB, tablePrefix string, userID strin
 }
 
 // EmitBalanceUpdateFromAccount emits a balance update using the current account state.
+// Also persists balances to the DB so that margin borrow/repay, interest accrual,
+// and funding settlement survive a restart. The matching-book fill path already
+// syncs via its own OnBalanceUpdate callback; this covers the non-fill paths.
 func (e *PaperTradeExchange) EmitBalanceUpdateFromAccount() {
 	if e.userDataEmitter != nil {
 		e.userDataEmitter.EmitBalanceUpdate(e.account.Balances())
 	}
+	e.syncBalances()
 }
 
 // RestoreFromDB loads open orders and balances from the database into
@@ -772,6 +942,13 @@ func (e *PaperTradeExchange) RestoreFromDB(ctx context.Context) error {
 	if e.futuresSettings.IsFutures {
 		if err := e.restoreFuturesPositions(ctx); err != nil {
 			log.WithError(err).Warn("paper trade: failed to restore futures positions from DB")
+		}
+	}
+
+	// 4. Restore margin borrow state if margin mode is enabled.
+	if e.marginSettings.IsMargin {
+		if err := e.restoreMarginStates(ctx); err != nil {
+			log.WithError(err).Warn("paper trade: failed to restore margin states from DB")
 		}
 	}
 
@@ -871,12 +1048,19 @@ func (e *PaperTradeExchange) restoreFuturesPositions(ctx context.Context) error 
 	var args []interface{}
 
 	if e.db.DriverName() == "postgres" {
-		// Get the latest row per symbol where position_amount != '0'
+		// Get the latest row per symbol where position_amount != '0'.
+		// Filter by strategy_instance_id when set so a container restart in
+		// multi-instance SaaS mode doesn't pull in positions owned by other
+		// containers under the same user_id.
 		query = `SELECT DISTINCT ON (symbol) symbol, position_side, leverage, entry_price, position_amount, margin_asset, strategy_instance_id
 			FROM "` + tableName + `"
-			WHERE user_id = $1 AND position_amount != '0'
-			ORDER BY symbol, updated_at DESC`
+			WHERE user_id = $1`
 		args = append(args, e.userID)
+		if e.strategyInstance != "" {
+			query += " AND strategy_instance_id = $2"
+			args = append(args, e.strategyInstance)
+		}
+		query += " AND position_amount != '0' ORDER BY symbol, updated_at DESC"
 	} else {
 		query = `SELECT symbol, position_side, leverage, entry_price, position_amount, margin_asset, strategy_instance_id
 			FROM ` + tableName + `
@@ -933,6 +1117,10 @@ func (e *PaperTradeExchange) restoreFuturesPositions(ctx context.Context) error 
 			PositionSide:       side,
 			MarginAsset:        r.MarginAsset,
 			StrategyInstanceID: r.StrategyInstanceID,
+			// Assume funding was settled at the most recent UTC 00/08/16 slot.
+			// Without this, a restart mid-window re-applies funding for the
+			// current slot — a double charge against the paper account.
+			LastFundingTime: lastFundingSlotUTC(time.Now()),
 		}
 		e.futuresStates[r.Symbol] = state
 		restored++
@@ -942,6 +1130,180 @@ func (e *PaperTradeExchange) restoreFuturesPositions(ctx context.Context) error 
 		log.Infof("paper trade: restored %d futures positions from DB", restored)
 	}
 	return rows.Err()
+}
+
+// restoreMarginStates reconstructs the in-memory margin borrow state per asset
+// by replaying paper_margin_loans minus paper_margin_repays. Without this,
+// restart drops the Borrowed/Interest counters to zero, so the next borrow
+// records only the new principal (allowing users to "forget" prior debt) and
+// the interest clock restarts (undercharging for the elapsed gap).
+func (e *PaperTradeExchange) restoreMarginStates(ctx context.Context) error {
+	if e.db == nil {
+		return nil
+	}
+
+	loansTable := e.tableName("margin_loans")
+	repaysTable := e.tableName("margin_repays")
+
+	type row struct {
+		Asset     string           `db:"asset"`
+		Principle fixedpoint.Value `db:"principle"`
+	}
+	var (
+		borrowed = make(map[string]fixedpoint.Value)
+		assets   []string
+	)
+
+	// Sum loans per asset.
+	var loanQuery string
+	var loanArgs []interface{}
+	if e.db.DriverName() == "postgres" {
+		loanQuery = `SELECT asset, SUM(principle::numeric) AS principle FROM "` + loansTable +
+			`" WHERE user_id = $1 GROUP BY asset`
+		loanArgs = append(loanArgs, e.userID)
+	} else {
+		loanQuery = `SELECT asset, SUM(principle) AS principle FROM ` + loansTable + ` GROUP BY asset`
+	}
+	loanRows, err := e.db.QueryxContext(ctx, loanQuery, loanArgs...)
+	if err != nil {
+		return fmt.Errorf("query margin loans: %w", err)
+	}
+	for loanRows.Next() {
+		var r row
+		if err := loanRows.StructScan(&r); err != nil {
+			loanRows.Close()
+			return fmt.Errorf("scan margin loan: %w", err)
+		}
+		borrowed[r.Asset] = borrowed[r.Asset].Add(r.Principle)
+	}
+	loanRows.Close()
+	if err := loanRows.Err(); err != nil {
+		return fmt.Errorf("iterate margin loans: %w", err)
+	}
+
+	// Subtract repays per asset.
+	var repayQuery string
+	var repayArgs []interface{}
+	if e.db.DriverName() == "postgres" {
+		repayQuery = `SELECT asset, SUM(principle::numeric) AS principle FROM "` + repaysTable +
+			`" WHERE user_id = $1 GROUP BY asset`
+		repayArgs = append(repayArgs, e.userID)
+	} else {
+		repayQuery = `SELECT asset, SUM(principle) AS principle FROM ` + repaysTable + ` GROUP BY asset`
+	}
+	repayRows, err := e.db.QueryxContext(ctx, repayQuery, repayArgs...)
+	if err != nil {
+		return fmt.Errorf("query margin repays: %w", err)
+	}
+	for repayRows.Next() {
+		var r row
+		if err := repayRows.StructScan(&r); err != nil {
+			repayRows.Close()
+			return fmt.Errorf("scan margin repay: %w", err)
+		}
+		borrowed[r.Asset] = borrowed[r.Asset].Sub(r.Principle)
+	}
+	repayRows.Close()
+	if err := repayRows.Err(); err != nil {
+		return fmt.Errorf("iterate margin repays: %w", err)
+	}
+
+	// Resolve the last interest accrual time per asset so the clock resumes
+	// correctly after restart. Without this, LastAccrual=time.Now() gifts the
+	// borrower the entire restart gap as interest-free.
+	interestTable := e.tableName("margin_interests")
+	lastAccrual := make(map[string]time.Time)
+	var interestQuery string
+	var interestArgs []interface{}
+	if e.db.DriverName() == "postgres" {
+		interestQuery = `SELECT asset, MAX(time) AS last_time FROM "` + interestTable +
+			`" WHERE user_id = $1 GROUP BY asset`
+		interestArgs = append(interestArgs, e.userID)
+	} else {
+		interestQuery = `SELECT asset, MAX(time) AS last_time FROM ` + interestTable + ` GROUP BY asset`
+	}
+	interestRows, err := e.db.QueryxContext(ctx, interestQuery, interestArgs...)
+	if err != nil {
+		return fmt.Errorf("query margin interest last time: %w", err)
+	}
+	for interestRows.Next() {
+		var r struct {
+			Asset    string    `db:"asset"`
+			LastTime time.Time `db:"last_time"`
+		}
+		if err := interestRows.StructScan(&r); err != nil {
+			interestRows.Close()
+			return fmt.Errorf("scan margin interest last time: %w", err)
+		}
+		lastAccrual[r.Asset] = r.LastTime
+	}
+	interestRows.Close()
+	if err := interestRows.Err(); err != nil {
+		return fmt.Errorf("iterate margin interest last time: %w", err)
+	}
+
+	// For assets with no prior interest rows, fall back to the earliest loan
+	// time so the clock starts from the original borrow.
+	earliestLoan := make(map[string]time.Time)
+	var loanTimeQuery string
+	var loanTimeArgs []interface{}
+	if e.db.DriverName() == "postgres" {
+		loanTimeQuery = `SELECT asset, MIN(time) AS first_time FROM "` + loansTable +
+			`" WHERE user_id = $1 GROUP BY asset`
+		loanTimeArgs = append(loanTimeArgs, e.userID)
+	} else {
+		loanTimeQuery = `SELECT asset, MIN(time) AS first_time FROM ` + loansTable + ` GROUP BY asset`
+	}
+	loanTimeRows, err := e.db.QueryxContext(ctx, loanTimeQuery, loanTimeArgs...)
+	if err != nil {
+		return fmt.Errorf("query margin loan first time: %w", err)
+	}
+	for loanTimeRows.Next() {
+		var r struct {
+			Asset     string    `db:"asset"`
+			FirstTime time.Time `db:"first_time"`
+		}
+		if err := loanTimeRows.StructScan(&r); err != nil {
+			loanTimeRows.Close()
+			return fmt.Errorf("scan margin loan first time: %w", err)
+		}
+		earliestLoan[r.Asset] = r.FirstTime
+	}
+	loanTimeRows.Close()
+	if err := loanTimeRows.Err(); err != nil {
+		return fmt.Errorf("iterate margin loan first time: %w", err)
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	var restored int
+	for asset, amt := range borrowed {
+		if amt.Sign() <= 0 {
+			continue
+		}
+		state := e.getOrCreateMarginState(asset)
+		state.Borrowed = amt
+		// Resume the interest clock from the last accrual (or earliest loan if
+		// interest never fired). Historical interest rows already debited the
+		// wallet, so we must NOT use time.Now() — that would gift the borrower
+		// the restart gap as interest-free.
+		switch {
+		case !lastAccrual[asset].IsZero():
+			state.LastAccrual = lastAccrual[asset]
+		case !earliestLoan[asset].IsZero():
+			state.LastAccrual = earliestLoan[asset]
+		default:
+			state.LastAccrual = time.Now()
+		}
+		state.InterestRate = fixedpoint.MustNewFromString(defaultHourlyMarginRate)
+		restored++
+		assets = append(assets, asset)
+	}
+	if restored > 0 {
+		log.Infof("paper trade: restored %d margin states from DB (assets: %v)", restored, assets)
+	}
+	return nil
 }
 
 // syncBalances writes current balances to the database.
@@ -958,9 +1320,6 @@ func (e *PaperTradeExchange) upsertBalances() error {
 	tableName := e.tableName("balances")
 	balances := e.account.Balances()
 	for currency, b := range balances {
-		if b.Total().IsZero() && b.Available.IsZero() && b.Locked.IsZero() {
-			continue
-		}
 		var sql string
 		switch e.db.DriverName() {
 		case "postgres":
@@ -1094,6 +1453,12 @@ func (e *PaperTradeExchange) SubmitOrder(ctx context.Context, submit types.Submi
 			return nil, fmt.Errorf("paper trade: cannot place market order before receiving market data for %s", submit.Symbol)
 		}
 	}
+	// Stop orders (esp. stop-market) carry the trigger price in StopPrice,
+	// not Price. Lock margin against StopPrice so cancel/trigger paths can
+	// symmetrically unlock the same amount.
+	if price.IsZero() && !submit.StopPrice.IsZero() {
+		price = submit.StopPrice
+	}
 
 	order := types.Order{
 		SubmitOrder:      submit,
@@ -1108,6 +1473,7 @@ func (e *PaperTradeExchange) SubmitOrder(ctx context.Context, submit types.Submi
 	order.StrategyInstanceID = submit.StrategyInstanceID
 	order.IsFutures = e.futuresSettings.IsFutures
 	order.IsMargin = e.marginSettings.IsMargin
+	order.IsIsolated = e.futuresSettings.IsIsolatedFutures || e.marginSettings.IsIsolatedMargin
 	if submit.Type == types.OrderTypeMarket {
 		order.Price = price
 	}
@@ -1175,22 +1541,26 @@ func (e *PaperTradeExchange) SubmitOrder(ctx context.Context, submit types.Submi
 		fill := matching.buildFillLocked(order, fillPrice, true)
 		matching.mu.Unlock()
 
-		// For taker limit orders, refund the difference between locked and used
-		if submit.Type == types.OrderTypeLimit {
+		// For taker limit BUY orders, refund the difference between locked
+		// and used (locked limitPrice*qty, used fillPrice*qty). SELL never
+		// over-locks — the fill already credits fillPrice*qty to quote, so
+		// any additional surplus refund would double-count.
+		if submit.Type == types.OrderTypeLimit && submit.Side == types.SideTypeBuy {
 			refunded := false
-			switch submit.Side {
-			case types.SideTypeBuy:
-				refund := price.Sub(fillPrice).Mul(submit.Quantity)
-				if refund.Sign() > 0 {
-					e.account.UnlockBalance(market.QuoteCurrency, refund)
-					refunded = true
+			// Futures/margin locks notional/leverage at submit, so the refund
+			// must be scaled by 1/leverage to match. Without this, a 10x
+			// futures taker limit buy would unlock 10× the excess margin.
+			var leverage fixedpoint.Value
+			if isFutures || isMargin {
+				leverage = e.effectiveLeverage(submit.Symbol)
+			}
+			refund := price.Sub(fillPrice).Mul(submit.Quantity)
+			if refund.Sign() > 0 {
+				if leverage.Sign() > 0 {
+					refund = refund.Div(leverage)
 				}
-			case types.SideTypeSell:
-				refund := fillPrice.Sub(price).Mul(submit.Quantity)
-				if refund.Sign() > 0 {
-					e.account.AddBalance(market.QuoteCurrency, refund)
-					refunded = true
-				}
+				e.account.UnlockBalance(market.QuoteCurrency, refund)
+				refunded = true
 			}
 			if refunded {
 				e.EmitBalanceUpdateFromAccount()

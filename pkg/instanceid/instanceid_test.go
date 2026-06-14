@@ -38,6 +38,30 @@ func TestCompute_Grid2(t *testing.T) {
 	}
 }
 
+// TestCompute_Grid2_AutoRange verifies that when autoRange is set, Compute
+// produces the same ID as Strategy.InstanceID(). Without this, the SaaS
+// manager and the running strategy disagree on the instance ID, so orders and
+// trades written by the strategy can't be queried by the manager.
+func TestCompute_Grid2_AutoRange(t *testing.T) {
+	config := `{"gridNumber":10,"autoRange":"14d"}`
+	got := Compute("grid2", "BTCUSDT", json.RawMessage(config))
+	want := "grid2-BTCUSDT-size-10-autoRange-14d"
+	if got != want {
+		t.Errorf("autoRange mismatch: got %q, want %q", got, want)
+	}
+}
+
+// TestCompute_XHedgeGrid_AutoRange verifies the same autoRange branching for
+// xhedgegrid. See TestCompute_Grid2_AutoRange for rationale.
+func TestCompute_XHedgeGrid_AutoRange(t *testing.T) {
+	config := `{"gridNumber":10,"autoRange":"7d"}`
+	got := Compute("xhedgegrid", "BTCUSDT", json.RawMessage(config))
+	want := "xhedgegrid-BTCUSDT-size-10-autoRange-7d"
+	if got != want {
+		t.Errorf("autoRange mismatch: got %q, want %q", got, want)
+	}
+}
+
 func TestCompute_Grid(t *testing.T) {
 	config := `{"gridNumber":10,"upperPrice":"70000","lowerPrice":"50000"}`
 	got := Compute("grid", "BTCUSDT", json.RawMessage(config))

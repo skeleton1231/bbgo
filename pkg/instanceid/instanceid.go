@@ -30,6 +30,9 @@ func Compute(strategy, symbol string, config json.RawMessage) string {
 
 	switch strategy {
 	case "grid2", "xhedgegrid":
+		if ar := paramString(params, "autoRange"); ar != "" {
+			return GridLikeAutoRange(strategy, symbol, paramInt(params, "gridNumber"), ar)
+		}
 		return GridLike(strategy, symbol, paramInt(params, "gridNumber"), paramString(params, "upperPrice"), paramString(params, "lowerPrice"))
 	case "grid":
 		return Grid(symbol, paramInt(params, "gridNumber"), paramString(params, "upperPrice"), paramString(params, "lowerPrice"))

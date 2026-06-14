@@ -170,9 +170,17 @@ func (e *PaperTradeExchange) RepayMarginAsset(ctx context.Context, asset string,
 			amount.String(), state.Borrowed.String(), asset)
 	}
 
+	now := time.Now()
+	// Settle partial interest accrued since the last hourly tick. Without
+	// this, a user who repays mid-hour gets the partial period interest-free.
+	interestEvt := e.accrueMarginInterestLocked(asset, state, now)
+
 	state.Borrowed = state.Borrowed.Sub(amount)
 	if state.Borrowed.IsZero() {
 		state.Interest = fixedpoint.Zero
+		state.LastAccrual = time.Time{}
+	} else {
+		state.LastAccrual = now
 	}
 
 	e.account.AddBalance(asset, amount.Neg())
@@ -185,11 +193,14 @@ func (e *PaperTradeExchange) RepayMarginAsset(ctx context.Context, asset string,
 			Exchange:      e.inner.Name(),
 			Asset:         asset,
 			Principle:     amount,
-			Time:          types.Time(time.Now()),
+			Time:          types.Time(now),
 		}
 	}
 	e.mu.Unlock()
 
+	if interestEvt != nil {
+		e.OnMarginInterest(*interestEvt)
+	}
 	if repayEvt != nil {
 		e.OnMarginRepay(*repayEvt)
 	}
@@ -219,6 +230,11 @@ func (e *PaperTradeExchange) getOrCreateFuturesState(symbol string) *paperFuture
 			Leverage:     20,
 			MarginAsset:  "USDT",
 			PositionSide: types.PositionType(PositionModeOneWay),
+			// Treat current slot as already settled so a position opened
+			// after a funding boundary doesn't get charged for that slot
+			// on the next timer tick. Real exchanges only charge funding
+			// at boundaries that occur while the position is open.
+			LastFundingTime: lastFundingSlotUTC(time.Now()),
 		}
 		e.futuresStates[symbol] = state
 	}
@@ -447,9 +463,38 @@ func (e *PaperTradeExchange) updateFuturesPositionLocked(symbol string, side typ
 
 }
 
+// accrueMarginInterestLocked applies interest accrued on state.Borrowed between
+// state.LastAccrual and `until`. Mutates state.Interest and the account balance.
+// Returns a MarginInterest event if any interest was accrued, nil otherwise.
+// Caller must hold e.mu and is responsible for updating state.LastAccrual.
+func (e *PaperTradeExchange) accrueMarginInterestLocked(asset string, state *paperMarginState, until time.Time) *types.MarginInterest {
+	if state.LastAccrual.IsZero() || !until.After(state.LastAccrual) {
+		return nil
+	}
+	hours := until.Sub(state.LastAccrual).Hours()
+	if hours <= 0 {
+		return nil
+	}
+	accruedInterest := state.Borrowed.Mul(state.InterestRate).Mul(fixedpoint.NewFromFloat(hours))
+	if accruedInterest.Sign() <= 0 {
+		return nil
+	}
+	state.Interest = state.Interest.Add(accruedInterest)
+	e.account.AddBalance(asset, accruedInterest.Neg())
+	return &types.MarginInterest{
+		Exchange:     e.inner.Name(),
+		Asset:        asset,
+		Principle:    state.Borrowed,
+		Interest:     accruedInterest,
+		InterestRate: state.InterestRate,
+		Time:         types.Time(until),
+	}
+}
+
 // updateMarginInterest accrues simulated interest on borrowed assets.
 func (e *PaperTradeExchange) updateMarginInterest() {
 	var events []types.MarginInterest
+	var balanceChanged bool
 	func() {
 		e.mu.Lock()
 		defer e.mu.Unlock()
@@ -460,27 +505,28 @@ func (e *PaperTradeExchange) updateMarginInterest() {
 				continue
 			}
 
-			hours := now.Sub(state.LastAccrual).Hours()
-			if hours < 1.0 {
+			// updateMarginInterest only charges on full-hour boundaries
+			// (vs. RepayMarginAsset which settles partial hours at repay time).
+			if now.Sub(state.LastAccrual).Hours() < 1.0 {
 				continue
 			}
 
-			accruedInterest := state.Borrowed.Mul(state.InterestRate).Mul(fixedpoint.NewFromFloat(hours))
-			state.Interest = state.Interest.Add(accruedInterest)
+			evt := e.accrueMarginInterestLocked(asset, state, now)
+			if evt == nil {
+				continue
+			}
 			state.LastAccrual = now
+			balanceChanged = true
 
 			if e.OnMarginInterest != nil {
-				events = append(events, types.MarginInterest{
-					Exchange:     e.inner.Name(),
-					Asset:        asset,
-					Principle:    state.Borrowed,
-					Interest:     accruedInterest,
-					InterestRate: state.InterestRate,
-					Time:         types.Time(now),
-				})
+				events = append(events, *evt)
 			}
 		}
 	}()
+
+	if balanceChanged {
+		e.EmitBalanceUpdateFromAccount()
+	}
 
 	if e.OnMarginInterest != nil {
 		for _, evt := range events {
@@ -552,6 +598,7 @@ func lastFundingSlotUTC(t time.Time) time.Time {
 // Settled on UTC 00/08/16 boundaries to match real exchange behavior.
 func (e *PaperTradeExchange) applyFundingRate() {
 	var events []types.FundingPayment
+	var balanceChanged bool
 	func() {
 		e.mu.Lock()
 		defer e.mu.Unlock()
@@ -593,6 +640,7 @@ func (e *PaperTradeExchange) applyFundingRate() {
 				signedFunding = fundingAmount
 				e.account.AddBalance(asset, signedFunding)
 			}
+			balanceChanged = true
 
 			state.LastFundingTime = slot
 
@@ -610,6 +658,10 @@ func (e *PaperTradeExchange) applyFundingRate() {
 				symbol, notional.String(), rate.String(), fundingAmount.String(), asset, state.PositionSide)
 		}
 	}()
+
+	if balanceChanged {
+		e.EmitBalanceUpdateFromAccount()
+	}
 
 	if e.OnFundingPayment != nil {
 		for _, evt := range events {

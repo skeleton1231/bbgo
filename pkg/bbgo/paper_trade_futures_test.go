@@ -220,6 +220,74 @@ func TestPaperTradeExchange_LiquidationPrice_Short(t *testing.T) {
 		"expected %s, got %s", expected.String(), risks[0].LiquidationPrice.String())
 }
 
+// TestCheckLiquidation_AppliesBalanceEffect verifies that liquidating a long
+// position correctly adjusts the wallet: removes the held base, credits the
+// quote at liquidation price, and unlocks the originally-locked margin.
+// Regression guard for the checkLiquidation path that previously only updated
+// position state without touching the balance — leaving stale base currency
+// and permanently locked margin after liquidation.
+func TestCheckLiquidation_AppliesBalanceEffect(t *testing.T) {
+	e := newTestPaperTradeExchange()
+	e.UseFutures()
+	require.NoError(t, e.SetLeverage(context.Background(), "BTCUSDT", 10))
+
+	// Simulate the post-open wallet state:
+	//   - Long 1 BTC at entry 50000 → liq price = 50000*(1 - 0.1 + 0.004) = 45200
+	//   - Margin locked at open = 1*50000/10 = 5000 USDT
+	//   - Base received at open = 1 BTC
+	e.mu.Lock()
+	e.updateFuturesPositionLocked("BTCUSDT", types.SideTypeBuy, fixedpoint.NewFromFloat(50000.0), fixedpoint.NewFromFloat(1.0), "")
+	e.mu.Unlock()
+	e.account.LockBalance("USDT", fixedpoint.NewFromFloat(5000.0))
+	e.account.AddBalance("BTC", fixedpoint.NewFromFloat(1.0))
+
+	book, ok := e.matchingBook("BTCUSDT")
+	require.True(t, ok)
+
+	// Kline whose Low crosses the long liq price (45200).
+	kline := types.KLine{
+		Symbol: "BTCUSDT",
+		Open:   fixedpoint.NewFromFloat(46000.0),
+		High:   fixedpoint.NewFromFloat(46100.0),
+		Low:    fixedpoint.NewFromFloat(44000.0),
+		Close:  fixedpoint.NewFromFloat(44500.0),
+	}
+
+	usdtBefore, _ := e.account.Balance("USDT")
+
+	fill := book.checkLiquidation(kline)
+	require.NotNil(t, fill, "liquidation should fire when Low <= liqPrice")
+
+	btcAfter, _ := e.account.Balance("BTC")
+	usdtAfter, _ := e.account.Balance("USDT")
+
+	// Base currency fully removed.
+	assert.True(t, btcAfter.Available.IsZero(),
+		"BTC available should be 0 after long liquidation, got %s", btcAfter.Available.String())
+
+	// Quote currency credited with liqPrice*qty - fee, plus the 5000 margin unlock.
+	// liqPrice = 45200, fee = 45200 * 0.0004 = 18.08
+	expectedQuoteDelta := fixedpoint.NewFromFloat(45200.0).
+		Sub(fixedpoint.NewFromFloat(45200.0).Mul(fixedpoint.NewFromFloat(paperFuturesTakerFeeRate))).
+		Add(fixedpoint.NewFromFloat(5000.0))
+	actualQuoteDelta := usdtAfter.Available.Sub(usdtBefore.Available)
+	assert.Truef(t, actualQuoteDelta.Compare(expectedQuoteDelta) == 0,
+		"USDT available delta: want %s, got %s (before=%s after=%s)",
+		expectedQuoteDelta.String(), actualQuoteDelta.String(),
+		usdtBefore.Available.String(), usdtAfter.Available.String())
+
+	// Locked margin fully released.
+	assert.True(t, usdtAfter.Locked.IsZero(),
+		"USDT locked should be 0 after margin release, got %s", usdtAfter.Locked.String())
+
+	// Position state cleared.
+	e.mu.Lock()
+	state := e.futuresStates["BTCUSDT"]
+	e.mu.Unlock()
+	require.NotNil(t, state)
+	assert.True(t, state.PositionAmount.IsZero(), "position amount should be zero after liquidation")
+}
+
 func TestPaperTradeExchange_UnrealizedPnL(t *testing.T) {
 	e := newTestPaperTradeExchange()
 	e.UseFutures()
