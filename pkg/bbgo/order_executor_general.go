@@ -208,6 +208,13 @@ func (e *GeneralOrderExecutor) Bind() {
 	}
 
 	e.tradeCollector.BindStream(e.session.UserDataStream)
+
+	// Auto-bind universal risk controller if BBGO_UNIVERSAL_RISK_* env vars are set.
+	// Lets the SaaS manager attach SL/TP/trailing-stop/max-position controls to
+	// any strategy using GeneralOrderExecutor without per-strategy code changes.
+	if cfg, ok := LoadUniversalRiskConfigFromEnv(); ok {
+		NewUniversalRiskController(cfg, e).Bind()
+	}
 }
 
 // CancelOrders cancels the given order objects directly
