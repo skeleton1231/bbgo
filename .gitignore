@@ -75,3 +75,6 @@ coverage_dum.txt
 # Windows crash dumps
 *.stackdump
 
+# Playwright MCP cache (local browser automation artifacts)
+.playwright-mcp/
+
