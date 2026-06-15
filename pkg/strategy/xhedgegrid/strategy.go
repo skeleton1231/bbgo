@@ -219,6 +219,10 @@ func (s *Strategy) ID() string {
 }
 
 func (s *Strategy) Validate() error {
+	if s.Symbol == "" {
+		return errors.New("symbol is required")
+	}
+
 	if s.AutoRange == nil {
 		if s.UpperPrice.IsZero() {
 			return errors.New("upperPrice can not be zero, you forgot to set?")

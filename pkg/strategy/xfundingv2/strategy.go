@@ -139,6 +139,10 @@ func (s *Strategy) InstanceID() string {
 }
 
 func (s *Strategy) Defaults() error {
+	if s.MarketSelectionConfig == nil {
+		s.MarketSelectionConfig = &MarketSelectionConfig{}
+	}
+
 	if len(s.CandidateSymbols) == 0 {
 		return errors.New("empty candidateSymbols")
 	}
@@ -146,7 +150,7 @@ func (s *Strategy) Defaults() error {
 	if s.TickSymbol == "" {
 		s.TickSymbol = s.CandidateSymbols[0]
 	}
-	if s.TickInterval.Duration() == 0 {
+	if s.TickInterval == "" {
 		s.TickInterval = types.Interval1m
 	}
 	if s.OpenPositionInterval.Duration() == 0 {

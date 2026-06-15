@@ -119,6 +119,9 @@ func (s *Strategy) Initialize() error {
 }
 
 func (s *Strategy) Validate() error {
+	if len(s.Assets) == 0 {
+		return errors.New("assets is required")
+	}
 	return nil
 }
 

@@ -63,6 +63,18 @@ func (s *Strategy) ID() string {
 }
 
 func (s *Strategy) Validate() error {
+	if s.Symbol == "" {
+		return fmt.Errorf("symbol is required")
+	}
+	if s.Quantity.Sign() <= 0 {
+		return fmt.Errorf("quantity must be > 0, got %v", s.Quantity)
+	}
+	if s.Leverage.Sign() <= 0 {
+		return fmt.Errorf("leverage must be > 0, got %v", s.Leverage)
+	}
+	if s.Interval == "" {
+		return fmt.Errorf("interval is required")
+	}
 	return nil
 }
 

@@ -100,6 +100,10 @@ func (s *Strategy) ID() string {
 }
 
 func (s *Strategy) Validate() error {
+	if s.Symbol == "" {
+		return fmt.Errorf("symbol is required")
+	}
+
 	if s.MaxOrderCount < 1 {
 		return fmt.Errorf("MaxOrderCount can not be < 1")
 	}

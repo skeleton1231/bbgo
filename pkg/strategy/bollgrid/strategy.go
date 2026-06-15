@@ -90,6 +90,9 @@ func (s *Strategy) InstanceID() string {
 }
 
 func (s *Strategy) Validate() error {
+	if s.Symbol == "" {
+		return fmt.Errorf("symbol is required")
+	}
 	if s.ProfitSpread.Sign() <= 0 {
 		// If profitSpread is empty or its value is negative
 		return fmt.Errorf("profit spread should bigger than 0")

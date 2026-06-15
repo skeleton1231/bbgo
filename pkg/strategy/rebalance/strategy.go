@@ -84,6 +84,10 @@ func (s *Strategy) InstanceID() string {
 }
 
 func (s *Strategy) Validate() error {
+	if s.QuoteCurrency == "" {
+		return fmt.Errorf("quoteCurrency is required")
+	}
+
 	if len(s.TargetWeights) == 0 {
 		return fmt.Errorf("targetWeights should not be empty")
 	}

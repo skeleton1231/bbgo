@@ -2,6 +2,7 @@ package factorzoo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -65,6 +66,9 @@ func (s *Strategy) Defaults() error {
 }
 
 func (s *Strategy) Validate() error {
+	if s.Symbol == "" {
+		return errors.New("symbol is required")
+	}
 	return nil
 }
 

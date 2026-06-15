@@ -2,6 +2,7 @@ package swing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	log "github.com/sirupsen/logrus"
@@ -84,7 +85,18 @@ func (s *Strategy) InstanceID() string {
 }
 
 func (s *Strategy) Validate() error {
-	// Market fields are populated by injection after validation, so we skip Market.Validate() here.
+	if s.Symbol == "" {
+		return errors.New("symbol is required")
+	}
+	if s.Interval == "" {
+		return errors.New("interval is required")
+	}
+	if s.BaseQuantity.Sign() <= 0 {
+		return errors.New("baseQuantity must be > 0")
+	}
+	if s.MovingAverageType != "SMA" && s.MovingAverageType != "EWMA" {
+		return fmt.Errorf("movingAverageType must be SMA or EWMA, got %q", s.MovingAverageType)
+	}
 	return nil
 }
 

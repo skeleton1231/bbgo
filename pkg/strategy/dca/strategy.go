@@ -2,6 +2,7 @@ package dca
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -86,6 +87,15 @@ func (s *Strategy) Defaults() error {
 }
 
 func (s *Strategy) Validate() error {
+	if s.Symbol == "" {
+		return errors.New("symbol is required")
+	}
+	if s.Budget.Sign() <= 0 {
+		return errors.New("budget must be > 0")
+	}
+	if s.InvestmentInterval == "" {
+		return errors.New("investmentInterval is required")
+	}
 	return nil
 }
 

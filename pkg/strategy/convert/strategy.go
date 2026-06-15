@@ -2,6 +2,7 @@ package convert
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"sync"
 	"time"
@@ -68,6 +69,15 @@ func (s *Strategy) Subscribe(session *bbgo.ExchangeSession) {
 }
 
 func (s *Strategy) Validate() error {
+	if s.From == "" {
+		return errors.New("from is required")
+	}
+	if s.To == "" {
+		return errors.New("to is required")
+	}
+	if s.Interval == "" {
+		return errors.New("interval is required")
+	}
 	return nil
 }
 

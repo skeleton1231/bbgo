@@ -2,6 +2,7 @@ package atrpin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -57,6 +58,15 @@ func (s *Strategy) Initialize() error {
 }
 
 func (s *Strategy) Validate() error {
+	if s.Symbol == "" {
+		return errors.New("symbol is required")
+	}
+	if s.Interval == "" {
+		return errors.New("interval is required")
+	}
+	if s.Window <= 0 {
+		return fmt.Errorf("window must be > 0, got %d", s.Window)
+	}
 	if s.ExpectedBaseBalance.Sign() < 0 {
 		return fmt.Errorf("expectedBaseBalance should be non-negative")
 	}

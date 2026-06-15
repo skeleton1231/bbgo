@@ -55,6 +55,10 @@ func (s *Strategy) Initialize() error {
 	apiKey := os.Getenv("COINMARKETCAP_API_KEY")
 	s.datasource = coinmarketcap.New(apiKey)
 
+	if len(s.BaseCurrencies) == 0 {
+		return fmt.Errorf("baseCurrencies is empty")
+	}
+
 	// select one symbol to subscribe
 	s.subscribeSymbol = s.BaseCurrencies[0] + s.QuoteCurrency
 
@@ -69,7 +73,7 @@ func (s *Strategy) ID() string {
 
 func (s *Strategy) Validate() error {
 	if len(s.BaseCurrencies) == 0 {
-		return fmt.Errorf("taretCurrencies should not be empty")
+		return fmt.Errorf("baseCurrencies should not be empty")
 	}
 
 	if slices.Contains(s.BaseCurrencies, s.QuoteCurrency) {

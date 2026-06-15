@@ -2,6 +2,7 @@ package harmonic
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -207,6 +208,12 @@ func (s *Strategy) ID() string {
 }
 
 func (s *Strategy) Validate() error {
+	if s.Symbol == "" {
+		return errors.New("symbol is required")
+	}
+	if s.Interval == "" {
+		return errors.New("interval is required")
+	}
 	return nil
 }
 

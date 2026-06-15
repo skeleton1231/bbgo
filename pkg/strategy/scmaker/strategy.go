@@ -2,6 +2,7 @@ package scmaker
 
 import (
 	"context"
+	"errors"
 	"math"
 	"sync"
 
@@ -83,6 +84,15 @@ func (s *Strategy) ID() string {
 }
 
 func (s *Strategy) Validate() error {
+	if s.Symbol == "" {
+		return errors.New("symbol is required")
+	}
+	if s.AdjustmentUpdateInterval == "" {
+		return errors.New("adjustmentUpdateInterval is required")
+	}
+	if s.LiquidityUpdateInterval == "" {
+		return errors.New("liquidityUpdateInterval is required")
+	}
 	return nil
 }
 

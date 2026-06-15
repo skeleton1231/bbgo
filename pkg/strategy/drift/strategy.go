@@ -161,7 +161,18 @@ func (s *Strategy) Defaults() error {
 }
 
 func (s *Strategy) Validate() error {
-	// Market fields are populated by injection after validation, so we skip Market.Validate() here.
+	if s.Symbol == "" {
+		return errors.New("symbol is required")
+	}
+	if s.Interval == "" {
+		return errors.New("interval is required")
+	}
+	if s.MinInterval == "" {
+		return errors.New("minInterval is required")
+	}
+	if s.Window <= 0 {
+		return fmt.Errorf("window must be > 0, got %d", s.Window)
+	}
 	return nil
 }
 

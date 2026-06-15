@@ -4,6 +4,8 @@ package flashcrash
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 
 	log "github.com/sirupsen/logrus"
@@ -63,7 +65,21 @@ func (s *Strategy) InstanceID() string {
 }
 
 func (s *Strategy) Validate() error {
-	// Market fields are populated by injection after validation, so we skip Market.Validate() here.
+	if s.Symbol == "" {
+		return errors.New("symbol is required")
+	}
+	if s.Interval == "" {
+		return errors.New("interval is required")
+	}
+	if s.GridNum <= 0 {
+		return fmt.Errorf("gridNumber must be > 0, got %d", s.GridNum)
+	}
+	if s.BaseQuantity.Sign() <= 0 {
+		return errors.New("baseQuantity must be > 0")
+	}
+	if s.Percentage.Sign() <= 0 {
+		return errors.New("percentage must be > 0")
+	}
 	return nil
 }
 

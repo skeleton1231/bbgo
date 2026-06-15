@@ -66,6 +66,10 @@ func (s *Strategy) InstanceID() string {
 }
 
 func (s *Strategy) Validate() error {
+	if s.Symbol == "" {
+		return fmt.Errorf("symbol is required")
+	}
+
 	if s.Quantity.Float64() <= 0 {
 		return fmt.Errorf("quantity should be positive")
 	}

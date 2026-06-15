@@ -126,6 +126,14 @@ func (s *Strategy) Validate() error {
 		return errors.New("interval is required")
 	}
 
+	if s.Quantity.Sign() <= 0 && s.Leverage.Sign() <= 0 {
+		return errors.New("quantity or leverage must be > 0")
+	}
+
+	if s.SupertrendMultiplier <= 0 {
+		return fmt.Errorf("supertrendMultiplier must be > 0, got %v", s.SupertrendMultiplier)
+	}
+
 	return nil
 }
 

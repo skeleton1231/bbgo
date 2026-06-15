@@ -2,6 +2,8 @@ package emacross
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -46,6 +48,21 @@ func (s *Strategy) ID() string {
 }
 
 func (s *Strategy) Validate() error {
+	if s.Symbol == "" {
+		return errors.New("symbol is required")
+	}
+	if s.Interval == "" {
+		return errors.New("interval is required")
+	}
+	if s.FastWindow <= 0 {
+		return fmt.Errorf("fastWindow must be > 0, got %d", s.FastWindow)
+	}
+	if s.SlowWindow <= 0 {
+		return fmt.Errorf("slowWindow must be > 0, got %d", s.SlowWindow)
+	}
+	if s.SlowWindow <= s.FastWindow {
+		return fmt.Errorf("slowWindow (%d) must be greater than fastWindow (%d)", s.SlowWindow, s.FastWindow)
+	}
 	return nil
 }
 

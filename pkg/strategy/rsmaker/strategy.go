@@ -151,6 +151,18 @@ func (s *Strategy) Validate() error {
 	if len(s.Symbol) == 0 {
 		return errors.New("symbol is required")
 	}
+	if s.Interval == "" {
+		return errors.New("interval is required")
+	}
+	if s.QuantityOrAmount.Quantity.Sign() <= 0 && s.QuantityOrAmount.Amount.Sign() <= 0 {
+		return errors.New("quantity or amount must be > 0")
+	}
+	if s.NeutralBollinger != nil && s.NeutralBollinger.BandWidth <= 0 {
+		return fmt.Errorf("neutralBollinger.bandWidth must be > 0, got %v", s.NeutralBollinger.BandWidth)
+	}
+	if s.DefaultBollinger != nil && s.DefaultBollinger.BandWidth <= 0 {
+		return fmt.Errorf("defaultBollinger.bandWidth must be > 0, got %v", s.DefaultBollinger.BandWidth)
+	}
 
 	return nil
 }

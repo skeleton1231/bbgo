@@ -264,6 +264,13 @@ func (s *Strategy) Validate() error {
 		return errors.New("symbol is required")
 	}
 
+	if s.NeutralBollinger != nil && s.NeutralBollinger.BandWidth <= 0 {
+		return errors.Errorf("neutralBollinger.bandWidth must be > 0, got %v", s.NeutralBollinger.BandWidth)
+	}
+	if s.DefaultBollinger != nil && s.DefaultBollinger.BandWidth <= 0 {
+		return errors.Errorf("defaultBollinger.bandWidth must be > 0, got %v", s.DefaultBollinger.BandWidth)
+	}
+
 	return nil
 }
 

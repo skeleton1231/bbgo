@@ -2261,6 +2261,10 @@ func (s *Strategy) tradeRecover(ctx context.Context) {
 }
 
 func (s *Strategy) Defaults() error {
+	if s.SignalConfigList == nil {
+		s.SignalConfigList = &signal.DynamicConfig{}
+	}
+
 	if s.BollBandInterval == "" {
 		s.BollBandInterval = types.Interval1m
 	}

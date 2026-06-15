@@ -2,6 +2,7 @@ package xgap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -100,6 +101,18 @@ func (s *Strategy) Initialize() error {
 }
 
 func (s *Strategy) Validate() error {
+	if s.Symbol == "" {
+		return errors.New("symbol is required")
+	}
+	if s.TradingExchange == "" {
+		return errors.New("tradingExchange is required")
+	}
+	if s.SourceExchange == "" {
+		return errors.New("sourceExchange is required")
+	}
+	if s.Quantity.Sign() <= 0 {
+		return errors.New("quantity must be > 0")
+	}
 	return nil
 }
 
