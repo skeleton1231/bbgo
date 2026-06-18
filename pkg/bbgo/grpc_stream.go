@@ -2,7 +2,6 @@ package bbgo
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -121,8 +120,18 @@ func (s *GRPCStream) Connect(ctx context.Context) error {
 	req := &pb.SubscribeRequest{Subscriptions: pbSubs}
 	stream, err := client.Subscribe(streamCtx, req)
 	if err != nil {
+		// Don't fail startup just because the market data service is
+		// temporarily unavailable. The container stays alive, strategies
+		// keep running on their last-known state, and a background
+		// reconnect loop will resume streaming when gRPC comes back.
+		// Returning the error here propagates up to RootCmd.Execute which
+		// calls log.Fatalf — killing the container and amplifying the
+		// outage.
 		streamCancel()
-		return fmt.Errorf("gRPC subscribe: %w", err)
+		log.WithError(err).Warn("gRPC initial subscribe failed, scheduling background reconnect")
+		go s.reconnectLoop()
+		s.EmitStart()
+		return nil
 	}
 
 	s.EmitConnect()

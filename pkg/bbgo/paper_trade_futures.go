@@ -596,6 +596,13 @@ func lastFundingSlotUTC(t time.Time) time.Time {
 // Positive rate: longs pay shorts. Negative rate: shorts pay longs.
 // Funding = position_amount × mark_price × funding_rate
 // Settled on UTC 00/08/16 boundaries to match real exchange behavior.
+//
+// Catch-up: if a position's LastFundingTime is several slots behind the
+// current slot (e.g. container was down for 21h, missing 2-3 settlements),
+// we settle ONE missed slot per call. The 1-hourly timer drives subsequent
+// slots until caught up. Each missed slot is paid at the current funding
+// rate — historical rates are not fetched, so a long downtime produces
+// approximate (not exact) backfill.
 func (e *PaperTradeExchange) applyFundingRate() {
 	var events []types.FundingPayment
 	var balanceChanged bool
@@ -604,15 +611,37 @@ func (e *PaperTradeExchange) applyFundingRate() {
 		defer e.mu.Unlock()
 
 		now := time.Now()
-		slot := lastFundingSlotUTC(now)
-		rate := fixedpoint.MustNewFromString(defaultFundingRate)
+		currentSlot := lastFundingSlotUTC(now)
+
+		// Refresh the per-slot funding rate cache once. Real Binance rates
+		// vary slot-to-slot (typically -0.05%..+0.10% for BTC perp); using
+		// a hardcoded 0.01% silently misprices PnL on every position.
+		if !currentSlot.Equal(e.fundingRateSlot) {
+			e.fundingRateCache = e.fetchFundingRates(currentSlot)
+			e.fundingRateSlot = currentSlot
+		}
 
 		for symbol, state := range e.futuresStates {
 			if state.PositionAmount.IsZero() {
 				continue
 			}
-			if !state.LastFundingTime.IsZero() && !state.LastFundingTime.Before(slot) {
-				continue
+
+			// Pick the slot to settle: the next 8h slot after LastFundingTime,
+			// capped at the current slot. When LastFundingTime is zero (fresh
+			// position never funded), settle the current slot.
+			var slot time.Time
+			if state.LastFundingTime.IsZero() {
+				slot = currentSlot
+			} else {
+				slot = state.LastFundingTime.Add(8 * time.Hour)
+				if slot.After(currentSlot) {
+					continue // up to date
+				}
+			}
+
+			rate, ok := e.fundingRateCache[symbol]
+			if !ok {
+				rate = fixedpoint.MustNewFromString(defaultFundingRate)
 			}
 
 			var markPrice fixedpoint.Value
@@ -642,6 +671,11 @@ func (e *PaperTradeExchange) applyFundingRate() {
 			}
 			balanceChanged = true
 
+			missed := ""
+			if !state.LastFundingTime.IsZero() && slot.Sub(state.LastFundingTime) > 8*time.Hour {
+				remaining := currentSlot.Sub(slot) / (8 * time.Hour)
+				missed = fmt.Sprintf(" (catch-up slot %s, %d slot(s) remaining)", slot.Format(time.RFC3339), remaining)
+			}
 			state.LastFundingTime = slot
 
 			if e.OnFundingPayment != nil {
@@ -654,8 +688,8 @@ func (e *PaperTradeExchange) applyFundingRate() {
 					Time:     types.Time(slot),
 				})
 			}
-			log.Infof("paper trade: funding rate applied for %s — notional=%s rate=%s funding=%s %s (position_side=%s)",
-				symbol, notional.String(), rate.String(), fundingAmount.String(), asset, state.PositionSide)
+			log.Infof("paper trade: funding rate applied for %s — notional=%s rate=%s funding=%s %s (position_side=%s)%s",
+				symbol, notional.String(), rate.String(), fundingAmount.String(), asset, state.PositionSide, missed)
 		}
 	}()
 
@@ -668,6 +702,35 @@ func (e *PaperTradeExchange) applyFundingRate() {
 			e.OnFundingPayment(evt)
 		}
 	}
+}
+
+// fetchFundingRates pulls the live funding rate for every symbol with an
+// open position. Returns an empty map (caller falls back to
+// defaultFundingRate) when the wrapped exchange doesn't implement
+// QueryPremiumIndex (only Binance does today) or any fetch fails. Errors
+// are logged at debug level — funding settlement is best-effort, not a
+// hard dependency.
+func (e *PaperTradeExchange) fetchFundingRates(slot time.Time) map[string]fixedpoint.Value {
+	fetcher, ok := e.inner.(premiumIndexFetcher)
+	if !ok {
+		return nil
+	}
+	out := make(map[string]fixedpoint.Value)
+	for symbol, state := range e.futuresStates {
+		if state.PositionAmount.IsZero() {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		idx, err := fetcher.QueryPremiumIndex(ctx, symbol)
+		cancel()
+		if err != nil || idx == nil {
+			log.WithError(err).Debugf("paper trade: live funding rate fetch failed for %s, falling back to default", symbol)
+			continue
+		}
+		out[symbol] = idx.LastFundingRate
+		log.Infof("paper trade: fetched live funding rate for %s slot %s — rate=%s", symbol, slot.Format(time.RFC3339), idx.LastFundingRate.String())
+	}
+	return out
 }
 
 // StartFundingRateTimer starts a goroutine that applies funding rate every 8 hours.

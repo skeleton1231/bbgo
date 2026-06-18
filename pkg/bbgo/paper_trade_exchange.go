@@ -785,6 +785,20 @@ type PaperTradeExchange struct {
 	OnMarginRepay    func(types.MarginRepay)
 	OnMarginInterest func(types.MarginInterest)
 	OnFundingPayment func(types.FundingPayment)
+
+	// Real funding-rate fetcher (optional). When the wrapped exchange
+	// supports QueryPremiumIndex (Binance does), paper mode pulls the
+	// live funding rate per 8h slot instead of using defaultFundingRate.
+	// Falls back to the hardcoded rate when nil or fetch fails.
+	fundingRateSlot  time.Time
+	fundingRateCache map[string]fixedpoint.Value
+}
+
+// premiumIndexFetcher is the optional interface the wrapped exchange can
+// implement to provide live funding rates. Binance's *exchange.Exchange
+// satisfies this.
+type premiumIndexFetcher interface {
+	QueryPremiumIndex(ctx context.Context, symbol string) (*types.PremiumIndex, error)
 }
 
 func NewPaperTradeExchange(inner types.Exchange, markets types.MarketMap, balances types.BalanceMap) *PaperTradeExchange {
@@ -799,12 +813,13 @@ func NewPaperTradeExchange(inner types.Exchange, markets types.MarketMap, balanc
 	account.UpdateBalances(balances)
 
 	e := &PaperTradeExchange{
-		inner:         inner,
-		markets:       markets,
-		account:       account,
-		matchingBooks: make(map[string]*paperMatchingBook),
-		futuresStates: make(map[string]*paperFuturesState),
-		marginStates:  make(map[string]*paperMarginState),
+		inner:            inner,
+		markets:          markets,
+		account:          account,
+		matchingBooks:    make(map[string]*paperMatchingBook),
+		futuresStates:    make(map[string]*paperFuturesState),
+		marginStates:     make(map[string]*paperMarginState),
+		fundingRateCache: make(map[string]fixedpoint.Value),
 	}
 
 	for symbol, market := range markets {
@@ -1051,8 +1066,12 @@ func (e *PaperTradeExchange) restoreFuturesPositions(ctx context.Context) error 
 		// Get the latest row per symbol where position_amount != '0'.
 		// Filter by strategy_instance_id when set so a container restart in
 		// multi-instance SaaS mode doesn't pull in positions owned by other
-		// containers under the same user_id.
-		query = `SELECT DISTINCT ON (symbol) symbol, position_side, leverage, entry_price, position_amount, margin_asset, strategy_instance_id
+		// containers under the same user_id. updated_at is read so
+		// LastFundingTime can be reconstructed to the slot the position was
+		// last active in — without this, restart drops catch-up state and
+		// any funding slots that elapsed during the downtime are silently
+		// never charged.
+		query = `SELECT DISTINCT ON (symbol) symbol, position_side, leverage, entry_price, position_amount, margin_asset, strategy_instance_id, updated_at
 			FROM "` + tableName + `"
 			WHERE user_id = $1`
 		args = append(args, e.userID)
@@ -1062,7 +1081,7 @@ func (e *PaperTradeExchange) restoreFuturesPositions(ctx context.Context) error 
 		}
 		query += " AND position_amount != '0' ORDER BY symbol, updated_at DESC"
 	} else {
-		query = `SELECT symbol, position_side, leverage, entry_price, position_amount, margin_asset, strategy_instance_id
+		query = `SELECT symbol, position_side, leverage, entry_price, position_amount, margin_asset, strategy_instance_id, '' AS updated_at
 			FROM ` + tableName + `
 			WHERE position_amount != 0 AND rowid IN (
 				SELECT MAX(rowid) FROM ` + tableName + ` WHERE position_amount != 0 GROUP BY symbol
@@ -1088,6 +1107,7 @@ func (e *PaperTradeExchange) restoreFuturesPositions(ctx context.Context) error 
 			PositionAmount     fixedpoint.Value `db:"position_amount"`
 			MarginAsset        string           `db:"margin_asset"`
 			StrategyInstanceID string           `db:"strategy_instance_id"`
+			UpdatedAt          time.Time        `db:"updated_at"`
 		}
 		if err := rows.StructScan(&r); err != nil {
 			return fmt.Errorf("scan futures position: %w", err)
@@ -1110,6 +1130,17 @@ func (e *PaperTradeExchange) restoreFuturesPositions(ctx context.Context) error 
 			side = types.PositionType(PositionModeOneWay)
 		}
 
+		// Reconstruct LastFundingTime from the position row's updated_at:
+		// the funding slot that contains updated_at is the most recent slot
+		// the position was known to be active in. The applyFundingRate loop
+		// then catches up chronologically (one slot per hourly tick) until
+		// it reaches the current slot. Without this, container downtime
+		// silently skips any 8h funding slots elapsed during the outage.
+		lastFunding := lastFundingSlotUTC(time.Now())
+		if !r.UpdatedAt.IsZero() {
+			lastFunding = lastFundingSlotUTC(r.UpdatedAt)
+		}
+
 		state := &paperFuturesState{
 			Leverage:           lev,
 			PositionAmount:     r.PositionAmount,
@@ -1117,10 +1148,7 @@ func (e *PaperTradeExchange) restoreFuturesPositions(ctx context.Context) error 
 			PositionSide:       side,
 			MarginAsset:        r.MarginAsset,
 			StrategyInstanceID: r.StrategyInstanceID,
-			// Assume funding was settled at the most recent UTC 00/08/16 slot.
-			// Without this, a restart mid-window re-applies funding for the
-			// current slot — a double charge against the paper account.
-			LastFundingTime: lastFundingSlotUTC(time.Now()),
+			LastFundingTime:    lastFunding,
 		}
 		e.futuresStates[r.Symbol] = state
 		restored++
@@ -1324,7 +1352,7 @@ func (e *PaperTradeExchange) upsertBalances() error {
 		switch e.db.DriverName() {
 		case "postgres":
 			sql = `INSERT INTO "` + tableName + `" (user_id, strategy_instance_id, currency, total, available, locked) VALUES ($1, $2, $3, $4, $5, $6)
-				ON CONFLICT (user_id, strategy_instance_id, currency) DO UPDATE SET total = $4, available = $5, locked = $6`
+				ON CONFLICT (user_id, strategy_instance_id, currency) DO UPDATE SET total = $4, available = $5, locked = $6, updated_at = NOW()`
 			_, err := e.db.Exec(sql, e.userID, e.strategyInstance, currency, b.Total().String(), b.Available.String(), b.Locked.String())
 			if err != nil {
 				return err

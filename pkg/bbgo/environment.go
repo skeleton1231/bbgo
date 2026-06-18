@@ -432,6 +432,7 @@ func (environ *Environment) Start(ctx context.Context) (err error) {
 			return err
 		}
 	}
+	StartHeartbeat(ctx, os.Getenv("BBGO_HEARTBEAT_FILE"))
 	return
 }
 
