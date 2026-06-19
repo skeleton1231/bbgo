@@ -463,6 +463,38 @@ func (e *PaperTradeExchange) updateFuturesPositionLocked(symbol string, side typ
 
 }
 
+// SyncStrategyPositionFromFuturesState copies the authoritative futures position
+// (PositionAmount, EntryPrice) from paperFuturesState into the given strategy
+// position. Returns true if a sync happened.
+//
+// This bridges the gap between the futures position tracker
+// (paperFuturesState, restored from paper_futures_position_risks on restart)
+// and the strategy's own *types.Position (loaded from JSON persistence,
+// which can be stale or zero after a container restart). Without this
+// sync, a SPOT strategy running on a FUTURES paper session starts each
+// session with Base=0/AverageCost=0, causing AddTrade's spot semantics
+// to compute wrong profits and accumulate wrong position state — even
+// though paperFuturesState itself is correct.
+//
+// Once Base/AverageCost are aligned, spot AddTrade produces results that
+// match updateFuturesPositionLocked: weighted-average entry on adds,
+// realized profit on reduces, and correct flip handling.
+func (e *PaperTradeExchange) SyncStrategyPositionFromFuturesState(symbol string, pos *types.Position) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	state, ok := e.futuresStates[symbol]
+	if !ok || state.PositionAmount.IsZero() {
+		return false
+	}
+
+	pos.Lock()
+	defer pos.Unlock()
+	pos.Base = state.PositionAmount
+	pos.AverageCost = state.EntryPrice
+	return true
+}
+
 // accrueMarginInterestLocked applies interest accrued on state.Borrowed between
 // state.LastAccrual and `until`. Mutates state.Interest and the account balance.
 // Returns a MarginInterest event if any interest was accrued, nil otherwise.

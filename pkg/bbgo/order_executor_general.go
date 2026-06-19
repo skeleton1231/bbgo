@@ -111,6 +111,20 @@ func NewGeneralOrderExecutor(
 		executor.tradeCollector.DisableOrderFilter(true)
 	}
 
+	// Paper-futures restart recovery: the strategy's *types.Position is loaded
+	// from JSON persistence, which can be stale (zero) after a container restart,
+	// while paperFuturesState is correctly restored from the
+	// futures_position_risks table. Without this sync, spot AddTrade sees
+	// Base=0 and computes wrong profits / accumulates wrong position state,
+	// even though the underlying futures state is correct. Once Base and
+	// AverageCost are aligned, spot AddTrade semantics match futures tracking.
+	if paperEx, ok := session.Exchange.(*PaperTradeExchange); ok && session.Futures && executor.position != nil {
+		if paperEx.SyncStrategyPositionFromFuturesState(symbol, executor.position) {
+			log.Infof("paper trade: synced strategy position for %s from futures state — base=%s avgCost=%s",
+				symbol, executor.position.Base.String(), executor.position.AverageCost.String())
+		}
+	}
+
 	if executor.position != nil && session.Margin {
 		market := executor.position.Market
 		marginInfoUpdater := session.GetMarginInfoUpdater()

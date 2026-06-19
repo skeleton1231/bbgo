@@ -763,3 +763,209 @@ func TestPaperTradeExchange_OneWayPositionSide_NeverEmpty(t *testing.T) {
 	}
 	e.mu.Unlock()
 }
+
+// TestPaperTradeExchange_SyncStrategyPositionFromFuturesState_Short verifies
+// the regression fix for the bug where a SPOT strategy's *types.Position
+// started at Base=0/AverageCost=0 after a container restart, even though
+// paperFuturesState was correctly restored from the DB. This caused spot
+// AddTrade to compute wrong profits and accumulate wrong position state.
+//
+// Repro:
+//   - User ran bollmaker (spot strategy) on FUTURES paper session
+//   - Container restarted with paperFuturesState.PositionAmount=-0.305
+//   - Strategy's JSON-persisted Position was stale/zero
+//   - Subsequent BUY reducing trades were treated as opening new longs
+//     instead of reducing the existing short → tiny per-close profits
+//     (0.10-0.40 USDT) instead of correct values.
+func TestPaperTradeExchange_SyncStrategyPositionFromFuturesState_Short(t *testing.T) {
+	e := newTestPaperTradeExchange()
+	e.UseFutures()
+
+	// Simulate restored paperFuturesState (e.g. -0.305 BTC short at 65545.38).
+	e.mu.Lock()
+	e.futuresStates["BTCUSDT"] = &paperFuturesState{
+		Leverage:       20,
+		PositionAmount: fixedpoint.MustNewFromString("-0.305"),
+		EntryPrice:     fixedpoint.MustNewFromString("65545.38"),
+		PositionSide:   types.PositionType(PositionModeOneWay),
+		MarginAsset:    "USDT",
+	}
+	e.mu.Unlock()
+
+	// Strategy position as loaded from stale JSON: Base=0, AverageCost=0.
+	pos := types.NewPositionFromMarket(types.Market{
+		BaseCurrency:  "BTC",
+		QuoteCurrency: "USDT",
+		Symbol:        "BTCUSDT",
+	})
+
+	ok := e.SyncStrategyPositionFromFuturesState("BTCUSDT", pos)
+	require.True(t, ok, "sync should report success when futures state exists")
+	assert.Equal(t, fixedpoint.MustNewFromString("-0.305"), pos.Base)
+	assert.Equal(t, fixedpoint.MustNewFromString("65545.38"), pos.AverageCost)
+}
+
+func TestPaperTradeExchange_SyncStrategyPositionFromFuturesState_Long(t *testing.T) {
+	e := newTestPaperTradeExchange()
+	e.UseFutures()
+
+	e.mu.Lock()
+	e.futuresStates["BTCUSDT"] = &paperFuturesState{
+		Leverage:       10,
+		PositionAmount: fixedpoint.MustNewFromString("0.5"),
+		EntryPrice:     fixedpoint.MustNewFromString("60000"),
+		PositionSide:   types.PositionType(PositionModeOneWay),
+		MarginAsset:    "USDT",
+	}
+	e.mu.Unlock()
+
+	pos := types.NewPositionFromMarket(types.Market{
+		BaseCurrency:  "BTC",
+		QuoteCurrency: "USDT",
+		Symbol:        "BTCUSDT",
+	})
+
+	ok := e.SyncStrategyPositionFromFuturesState("BTCUSDT", pos)
+	require.True(t, ok)
+	assert.Equal(t, fixedpoint.MustNewFromString("0.5"), pos.Base)
+	assert.Equal(t, fixedpoint.MustNewFromString("60000"), pos.AverageCost)
+}
+
+func TestPaperTradeExchange_SyncStrategyPositionFromFuturesState_NoState(t *testing.T) {
+	e := newTestPaperTradeExchange()
+	e.UseFutures()
+
+	pos := types.NewPositionFromMarket(types.Market{
+		BaseCurrency:  "BTC",
+		QuoteCurrency: "USDT",
+		Symbol:        "BTCUSDT",
+	})
+
+	// No futures state for BTCUSDT → sync returns false, position untouched.
+	ok := e.SyncStrategyPositionFromFuturesState("BTCUSDT", pos)
+	assert.False(t, ok)
+	assert.True(t, pos.Base.IsZero())
+	assert.True(t, pos.AverageCost.IsZero())
+}
+
+func TestPaperTradeExchange_SyncStrategyPositionFromFuturesState_ZeroPosition(t *testing.T) {
+	e := newTestPaperTradeExchange()
+	e.UseFutures()
+
+	// A closed position (amount=0) should not sync — otherwise we'd overwrite
+	// a strategy's possibly-correct accumulated state with zeros.
+	e.mu.Lock()
+	e.futuresStates["BTCUSDT"] = &paperFuturesState{
+		Leverage:       20,
+		PositionAmount: fixedpoint.Zero,
+		EntryPrice:     fixedpoint.MustNewFromString("65545.38"),
+		PositionSide:   types.PositionType(PositionModeOneWay),
+		MarginAsset:    "USDT",
+	}
+	e.mu.Unlock()
+
+	pos := types.NewPositionFromMarket(types.Market{
+		BaseCurrency:  "BTC",
+		QuoteCurrency: "USDT",
+		Symbol:        "BTCUSDT",
+	})
+	pos.Base = fixedpoint.MustNewFromString("0.1") // pretend strategy has some state
+	pos.AverageCost = fixedpoint.MustNewFromString("50000")
+
+	ok := e.SyncStrategyPositionFromFuturesState("BTCUSDT", pos)
+	assert.False(t, ok)
+	// Position unchanged.
+	assert.Equal(t, fixedpoint.MustNewFromString("0.1"), pos.Base)
+	assert.Equal(t, fixedpoint.MustNewFromString("50000"), pos.AverageCost)
+}
+
+// TestPaperTradeExchange_SyncThenAddTrade_RealizesCorrectProfit is the
+// end-to-end regression test: after sync, a reducing trade realizes the
+// correct profit (vs the bug where it opened a new tiny long instead).
+//
+// Scenario:
+//   - Restored futures state: short -0.305 BTC @ 65545.38
+//   - Strategy position synced via SyncStrategyPositionFromFuturesState
+//   - Reducing BUY of 0.001 BTC @ 64000 arrives
+//   - Expected: profit = (65545.38 - 64000) × 0.001 = 1.54538 USDT
+//   - Bug behavior (without sync): Base=0 so BUY treats it as opening a
+//     new long, madeProfit=false, profit=0.
+func TestPaperTradeExchange_SyncThenAddTrade_RealizesCorrectProfit(t *testing.T) {
+	e := newTestPaperTradeExchange()
+	e.UseFutures()
+
+	e.mu.Lock()
+	e.futuresStates["BTCUSDT"] = &paperFuturesState{
+		Leverage:       20,
+		PositionAmount: fixedpoint.MustNewFromString("-0.305"),
+		EntryPrice:     fixedpoint.MustNewFromString("65545.38"),
+		PositionSide:   types.PositionType(PositionModeOneWay),
+		MarginAsset:    "USDT",
+	}
+	e.mu.Unlock()
+
+	pos := types.NewPositionFromMarket(types.Market{
+		BaseCurrency:  "BTC",
+		QuoteCurrency: "USDT",
+		Symbol:        "BTCUSDT",
+	})
+	require.True(t, e.SyncStrategyPositionFromFuturesState("BTCUSDT", pos))
+
+	// Reducing BUY: short -> less short.
+	trade := types.Trade{
+		Symbol:        "BTCUSDT",
+		Side:          types.SideTypeBuy,
+		Price:         fixedpoint.MustNewFromString("64000"),
+		Quantity:      fixedpoint.MustNewFromString("0.001"),
+		QuoteQuantity: fixedpoint.MustNewFromString("64"),
+		Fee:           fixedpoint.Zero,
+		FeeCurrency:   "USDT",
+		IsFutures:     true,
+		Time:          types.Time(time.Now()),
+	}
+
+	profit, _, madeProfit := pos.AddTrade(trade)
+	require.True(t, madeProfit, "reducing BUY on synced short position must realize profit")
+
+	expectedProfit := fixedpoint.MustNewFromString("65545.38").
+		Sub(fixedpoint.MustNewFromString("64000")).
+		Mul(fixedpoint.MustNewFromString("0.001"))
+	assert.True(t, profit.Compare(expectedProfit) == 0,
+		"profit %s should equal expected %s", profit.String(), expectedProfit.String())
+
+	// Position should still be short, slightly reduced.
+	assert.Equal(t, fixedpoint.MustNewFromString("-0.304"), pos.Base)
+	// AverageCost unchanged for short-reduce (matches futures EntryPrice).
+	assert.Equal(t, fixedpoint.MustNewFromString("65545.38"), pos.AverageCost)
+}
+
+// TestPaperTradeExchange_NoSync_AddTrade_BugBehavior captures the
+// pre-fix behavior: without sync, the reducing BUY on a zero-Base
+// position is treated as opening a new long, madeProfit=false.
+// This test documents the bug so future regressions are caught.
+func TestPaperTradeExchange_NoSync_AddTrade_BugBehavior(t *testing.T) {
+	pos := types.NewPositionFromMarket(types.Market{
+		BaseCurrency:  "BTC",
+		QuoteCurrency: "USDT",
+		Symbol:        "BTCUSDT",
+	})
+	// No sync → Base=0, AverageCost=0 (simulating stale/missing JSON).
+
+	trade := types.Trade{
+		Symbol:        "BTCUSDT",
+		Side:          types.SideTypeBuy,
+		Price:         fixedpoint.MustNewFromString("64000"),
+		Quantity:      fixedpoint.MustNewFromString("0.001"),
+		QuoteQuantity: fixedpoint.MustNewFromString("64"),
+		Fee:           fixedpoint.Zero,
+		FeeCurrency:   "USDT",
+		IsFutures:     true,
+		Time:          types.Time(time.Now()),
+	}
+
+	profit, _, madeProfit := pos.AddTrade(trade)
+	assert.False(t, madeProfit, "BUG: without sync, reducing BUY is misclassified as opening new long")
+	assert.True(t, profit.IsZero())
+	// Base ends up positive — completely wrong vs the actual short position.
+	assert.Equal(t, fixedpoint.MustNewFromString("0.001"), pos.Base)
+}
