@@ -3,6 +3,7 @@ package bbgo
 import (
 	"context"
 	"fmt"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 
@@ -17,6 +18,12 @@ type grpcExchangeProxy struct {
 	exchangeName string
 	queryClient  *pb.MarketDataQueryClient
 	riskService  types.ExchangeRiskService
+	// tradeHistory holds ExchangeTradeHistoryService from the wrapped exchange
+	// when present. grpcExchangeProxy embeds the types.Exchange *interface*, so
+	// Go only promotes that interface's methods — QueryTrades/QueryClosedOrders
+	// (from the separate ExchangeTradeHistoryService) would otherwise be hidden,
+	// breaking strategies like grid2 that recover state from trade history.
+	tradeHistory types.ExchangeTradeHistoryService
 }
 
 func newGRPCExchangeProxy(real types.Exchange, conn *grpc.ClientConn, exchangeName string) *grpcExchangeProxy {
@@ -28,7 +35,28 @@ func newGRPCExchangeProxy(real types.Exchange, conn *grpc.ClientConn, exchangeNa
 	if rs, ok := real.(types.ExchangeRiskService); ok {
 		p.riskService = rs
 	}
+	if th, ok := real.(types.ExchangeTradeHistoryService); ok {
+		p.tradeHistory = th
+	}
 	return p
+}
+
+// QueryTrades delegates ExchangeTradeHistoryService to the real exchange.
+// Trade history is account data, not market data, so it is served directly
+// (klines/tickers still route through gRPC).
+func (p *grpcExchangeProxy) QueryTrades(ctx context.Context, symbol string, options *types.TradeQueryOptions) ([]types.Trade, error) {
+	if p.tradeHistory == nil {
+		return nil, fmt.Errorf("exchange %s does not implement ExchangeTradeHistoryService", p.exchangeName)
+	}
+	return p.tradeHistory.QueryTrades(ctx, symbol, options)
+}
+
+// QueryClosedOrders delegates ExchangeTradeHistoryService to the real exchange.
+func (p *grpcExchangeProxy) QueryClosedOrders(ctx context.Context, symbol string, since, until time.Time, lastOrderID uint64) ([]types.Order, error) {
+	if p.tradeHistory == nil {
+		return nil, fmt.Errorf("exchange %s does not implement ExchangeTradeHistoryService", p.exchangeName)
+	}
+	return p.tradeHistory.QueryClosedOrders(ctx, symbol, since, until, lastOrderID)
 }
 
 func (p *grpcExchangeProxy) QueryPositionRisk(ctx context.Context, symbol ...string) ([]types.PositionRisk, error) {
@@ -130,6 +158,8 @@ func pbTickerToTypes(t *pb.Ticker) *types.Ticker {
 		Volume: fixedpoint.NewFromFloat(t.Volume),
 	}
 }
+
 // compile-time interface checks
 var _ types.Exchange = (*grpcExchangeProxy)(nil)
 var _ types.ExchangeRiskService = (*grpcExchangeProxy)(nil)
+var _ types.ExchangeTradeHistoryService = (*grpcExchangeProxy)(nil)
