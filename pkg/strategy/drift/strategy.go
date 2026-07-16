@@ -15,11 +15,11 @@ import (
 	"go.uber.org/multierr"
 
 	"github.com/c9s/bbgo/pkg/bbgo"
-	"github.com/c9s/bbgo/pkg/instanceid"
 	"github.com/c9s/bbgo/pkg/datatype/floats"
 	"github.com/c9s/bbgo/pkg/dynamic"
 	"github.com/c9s/bbgo/pkg/fixedpoint"
 	"github.com/c9s/bbgo/pkg/indicator"
+	"github.com/c9s/bbgo/pkg/instanceid"
 	"github.com/c9s/bbgo/pkg/interact"
 	"github.com/c9s/bbgo/pkg/types"
 	"github.com/c9s/bbgo/pkg/util"
@@ -172,6 +172,9 @@ func (s *Strategy) Validate() error {
 	}
 	if s.Window <= 0 {
 		return fmt.Errorf("window must be > 0, got %d", s.Window)
+	}
+	if s.PredictOffset < 0 {
+		return fmt.Errorf("predictOffset must be >= 0, got %d", s.PredictOffset)
 	}
 	return nil
 }
@@ -565,6 +568,24 @@ func (s *Strategy) klineHandlerMin(ctx context.Context, kline types.KLine, count
 	}
 }
 
+// driftWarmedUp reports whether the smoothed drift series has produced enough
+// samples to be trusted for signal generation.
+//
+// The check MUST use the full series Length(). Array(2) is structurally capped
+// at 2 elements, so comparing len(Array(2)) against PredictOffset (>2 in normal
+// configs) gates forever — the strategy permanently logs "indicator not warmed
+// up" and never trades. Regression for the drift paper container that ran 24h
+// without a single order.
+func (s *Strategy) driftWarmedUp() bool {
+	return s.drift.Length() >= 2 && s.drift.Length() >= s.PredictOffset
+}
+
+// driftDerivativeWarmedUp is the warmup gate for the raw drift-derivative
+// (WeightedDrift) series. See driftWarmedUp for why Length() is required.
+func (s *Strategy) driftDerivativeWarmedUp() bool {
+	return s.drift.drift.Length() >= 2 && s.drift.drift.Length() >= s.PredictOffset
+}
+
 func (s *Strategy) klineHandler(ctx context.Context, kline types.KLine, counter int) {
 	start := time.Now()
 	defer func() {
@@ -594,27 +615,27 @@ func (s *Strategy) klineHandler(ctx context.Context, kline types.KLine, counter 
 	highdiff := highf - pricef
 	s.stdevHigh.Update(highdiff)
 
-	drift := s.drift.Array(2)
-
-	if len(drift) < 2 || len(drift) < s.PredictOffset {
+	if !s.driftWarmedUp() {
 		log.WithFields(logrus.Fields{
 			"symbol":        kline.Symbol,
 			"interval":      kline.Interval.String(),
-			"driftLen":      len(drift),
+			"driftLen":      s.drift.Length(),
 			"predictOffset": s.PredictOffset,
 		}).Warnf("klineHandler skipping, drift indicator not warmed up")
 		return
 	}
-	ddrift := s.drift.drift.Array(2)
-	if len(ddrift) < 2 || len(ddrift) < s.PredictOffset {
+	drift := s.drift.Array(2)
+
+	if !s.driftDerivativeWarmedUp() {
 		log.WithFields(logrus.Fields{
 			"symbol":        kline.Symbol,
 			"interval":      kline.Interval.String(),
-			"ddriftLen":     len(ddrift),
+			"ddriftLen":     s.drift.drift.Length(),
 			"predictOffset": s.PredictOffset,
 		}).Warnf("klineHandler skipping, drift-derivative not warmed up")
 		return
 	}
+	ddrift := s.drift.drift.Array(2)
 
 	if s.Status != types.StrategyStatusRunning {
 		return
