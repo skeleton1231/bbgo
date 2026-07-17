@@ -306,13 +306,16 @@ func (s *FailedBreakHigh) pilotQuantityCalculation() {
 		s.Leverage.Float64())
 
 	quantity, err := bbgo.CalculateBaseQuantity(s.session, s.Market, s.lastHigh, s.Quantity, s.Leverage)
-	if err != nil {
-		log.WithError(err).Errorf("quantity calculation error")
-	}
-
+	// See BreakLow.pilotQuantityCalculation: CalculateBaseQuantity can return a
+	// non-zero quantity with an error (base balance not yet restored at init,
+	// or a futures short that holds no base). The resolved quantity is usable,
+	// so only a zero quantity is a hard failure.
 	if quantity.IsZero() {
-		log.WithError(err).Errorf("quantity is zero, can not submit order")
+		log.WithError(err).Errorf("quantity calculation error")
 		return
+	}
+	if err != nil {
+		log.WithError(err).Debugf("quantity calculation soft warning")
 	}
 
 	bbgo.Notify("%s %f quantity will be used for failed break high short", s.Symbol, quantity.Float64())

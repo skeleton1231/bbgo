@@ -272,11 +272,11 @@ func (s *BreakLow) Bind(session *bbgo.ExchangeSession, orderExecutor *bbgo.Gener
 			log.WithError(err).Errorf("failed to open short position")
 		} else {
 			log.WithFields(logrus.Fields{
-				"symbol":     symbol,
-				"interval":   s.Interval.String(),
-				"price":      opts.Price.String(),
+				"symbol":      symbol,
+				"interval":    s.Interval.String(),
+				"price":       opts.Price.String(),
 				"previousLow": previousLow.String(),
-				"breakPrice": breakPrice.String(),
+				"breakPrice":  breakPrice.String(),
 			}).Infof("break-low signal fired, opened short position")
 		}
 	}))
@@ -293,13 +293,18 @@ func (s *BreakLow) pilotQuantityCalculation() {
 		s.Leverage.Float64())
 
 	quantity, err := bbgo.CalculateBaseQuantity(s.session, s.Market, s.lastLow, s.Quantity, s.Leverage)
-	if err != nil {
-		log.WithError(err).Errorf("quantity calculation error")
-	}
-
+	// CalculateBaseQuantity can return a non-zero quantity together with an
+	// error — e.g. when the account base balance has not yet been restored at
+	// strategy init, or for a futures short that (correctly) holds no base
+	// currency. The resolved quantity is still usable in that case, so only a
+	// zero quantity is a hard failure; otherwise the error is a soft,
+	// debug-level note rather than a misleading startup ERROR.
 	if quantity.IsZero() {
-		log.WithError(err).Errorf("quantity is zero, can not submit order")
+		log.WithError(err).Errorf("quantity calculation error")
 		return
+	}
+	if err != nil {
+		log.WithError(err).Debugf("quantity calculation soft warning")
 	}
 
 	bbgo.Notify("%s %f quantity will be used for shorting", s.Symbol, quantity.Float64())
