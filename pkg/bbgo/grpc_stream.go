@@ -24,6 +24,16 @@ type GRPCStream struct {
 	exchangeName string
 	grpcAddr     string
 	conn         *grpc.ClientConn
+	// ownsConn reports whether the stream dialed the current conn itself
+	// (during reconnectLoop) and is therefore responsible for closing it.
+	// The initial conn is borrowed from SharedServiceSource and shared with
+	// the query proxy, so it must never be closed by the stream — closing it
+	// permanently breaks every proxy unary call with
+	// "grpc: the client connection is closing". As long as it is never
+	// Close()d, grpc-go's internal HTTP/2 reconnect/backoff self-heals the
+	// borrowed conn when the market-data server comes back, so the proxy's
+	// QueryTicker/QueryKLines recover automatically.
+	ownsConn bool
 
 	mu            sync.Mutex
 	subscriptions []types.Subscription
@@ -54,10 +64,49 @@ func NewGRPCStream(conn *grpc.ClientConn, exchangeName string, grpcAddr string) 
 	rootCtx, rootCancel := context.WithCancel(context.Background())
 	return &GRPCStream{
 		conn:         conn,
+		ownsConn:     false, // conn is borrowed from SharedServiceSource — do not close
 		exchangeName: exchangeName,
 		grpcAddr:     grpcAddr,
 		rootCtx:      rootCtx,
 		rootCancel:   rootCancel,
+	}
+}
+
+// swapConn atomically replaces the active connection used for streaming.
+// The previous connection is closed ONLY when the stream owned it (i.e. it was
+// dialed during a previous reconnectLoop pass). The initial connection is
+// borrowed from SharedServiceSource and shared with the query proxy, so it
+// must never be closed here — doing so would break every proxy
+// QueryTicker/QueryKLines call with "grpc: the client connection is closing".
+//
+// If the stream is already shutting down (rootCtx canceled — e.g. Close() ran
+// while reconnectLoop was mid-dial), the freshly-dialed newConn is closed here
+// and NOT installed. Checking rootCtx while holding s.mu closes the race
+// window between Close()'s rootCancel() and the install, which would otherwise
+// orphan newConn with no owner left to close it.
+func (s *GRPCStream) swapConn(newConn *grpc.ClientConn, newStreamCtx context.Context, newStreamCancel context.CancelFunc) {
+	s.mu.Lock()
+	if s.rootCtx.Err() != nil {
+		s.mu.Unlock()
+		if newStreamCancel != nil {
+			newStreamCancel()
+		}
+		_ = newConn.Close()
+		return
+	}
+	oldConn := s.conn
+	oldOwned := s.ownsConn
+	if s.streamCancel != nil {
+		s.streamCancel()
+	}
+	s.conn = newConn
+	s.ownsConn = true // any conn the stream dials during reconnect is owned
+	s.streamCtx = newStreamCtx
+	s.streamCancel = newStreamCancel
+	s.mu.Unlock()
+
+	if oldOwned && oldConn != nil {
+		_ = oldConn.Close()
 	}
 }
 
@@ -112,11 +161,12 @@ func (s *GRPCStream) Connect(ctx context.Context) error {
 
 	streamCtx, streamCancel := context.WithCancel(s.rootCtx)
 	s.mu.Lock()
+	conn := s.conn
 	s.streamCtx = streamCtx
 	s.streamCancel = streamCancel
 	s.mu.Unlock()
 
-	client := pb.NewMarketDataServiceClient(s.conn)
+	client := pb.NewMarketDataServiceClient(conn)
 	req := &pb.SubscribeRequest{Subscriptions: pbSubs}
 	stream, err := client.Subscribe(streamCtx, req)
 	if err != nil {
@@ -142,6 +192,19 @@ func (s *GRPCStream) Connect(ctx context.Context) error {
 
 func (s *GRPCStream) Close() error {
 	s.rootCancel()
+	// Release any connection the stream dialed itself (during reconnect).
+	// Borrowed/shared conns are left open for the query proxy. Clearing the
+	// fields under the lock makes Close idempotent and works with swapConn's
+	// rootCtx check so a concurrently-dialed conn is never orphaned.
+	s.mu.Lock()
+	ownedConn := s.conn
+	owned := s.ownsConn
+	s.conn = nil
+	s.ownsConn = false
+	s.mu.Unlock()
+	if owned && ownedConn != nil {
+		_ = ownedConn.Close()
+	}
 	return nil
 }
 
@@ -252,17 +315,7 @@ func (s *GRPCStream) reconnectLoop() {
 			continue
 		}
 
-		oldConn := s.conn
-		s.mu.Lock()
-		if s.streamCancel != nil {
-			s.streamCancel()
-		}
-		s.conn = conn
-		s.streamCtx = streamCtx
-		s.streamCancel = streamCancel
-		s.mu.Unlock()
-
-		oldConn.Close()
+		s.swapConn(conn, streamCtx, streamCancel)
 		log.Info("gRPC market data reconnected successfully")
 		s.EmitConnect()
 		go s.receiveLoop(stream)
