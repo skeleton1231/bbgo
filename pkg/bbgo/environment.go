@@ -298,6 +298,19 @@ func (environ *Environment) configureSupabase() error {
 	if err != nil {
 		return fmt.Errorf("connect to supabase postgres: %w", err)
 	}
+	// Cap concurrent Postgres connections PER CONTAINER so the total across many
+	// paper/live containers stays under Supabase's connection limit. bbgo's
+	// per-container DB write volume is low and sequential (orders/trades/asset
+	// snapshots, one at a time), so a single open connection is sufficient. This
+	// prevents dozens of containers from exhausting the pool (SQLSTATE 53300
+	// "remaining connection slots reserved for roles with the SUPERUSER
+	// attribute") WITHOUT a PgBouncer/Supavisor pooler — which is incompatible
+	// with bbgo's prepared-statement usage: extended protocol splits Parse/Bind
+	// across pooled backends and corrupts writes ("bind message supplies N
+	// parameters, prepared statement requires M"); simple protocol client-side
+	// parameter interpolation causes SQL syntax errors (SQLSTATE 42601).
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 
 	prefix := os.Getenv("SUPABASE_TABLE_PREFIX")
 	log.Infof("using supabase postgres backend for user %s (prefix=%q)", userID, prefix)
