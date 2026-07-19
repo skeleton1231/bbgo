@@ -10,16 +10,16 @@ import (
 func Test_genOrderSQL(t *testing.T) {
 	t.Run("accept empty options", func(t *testing.T) {
 		o := QueryOrdersOptions{}
-		assert.Equal(t, "SELECT orders.*, IFNULL(SUM(t.price * t.quantity)/SUM(t.quantity), orders.price) AS average_price FROM orders LEFT JOIN trades AS t ON (t.order_id = orders.order_id) GROUP BY orders.gid  ORDER BY orders.gid ASC LIMIT 500", genOrderSQL("sqlite", o))
+		assert.Equal(t, "SELECT orders.*, IFNULL(SUM(t.price * t.quantity)/SUM(t.quantity), orders.price) AS average_price FROM orders LEFT JOIN trades AS t ON (t.order_id = orders.order_id) GROUP BY orders.gid  ORDER BY orders.gid ASC LIMIT 500", genOrderSQL("sqlite", "orders", o))
 	})
 
 	t.Run("different ordering ", func(t *testing.T) {
 		o := QueryOrdersOptions{}
-		assert.Equal(t, "SELECT orders.*, IFNULL(SUM(t.price * t.quantity)/SUM(t.quantity), orders.price) AS average_price FROM orders LEFT JOIN trades AS t ON (t.order_id = orders.order_id) GROUP BY orders.gid  ORDER BY orders.gid ASC LIMIT 500", genOrderSQL("sqlite", o))
+		assert.Equal(t, "SELECT orders.*, IFNULL(SUM(t.price * t.quantity)/SUM(t.quantity), orders.price) AS average_price FROM orders LEFT JOIN trades AS t ON (t.order_id = orders.order_id) GROUP BY orders.gid  ORDER BY orders.gid ASC LIMIT 500", genOrderSQL("sqlite", "orders", o))
 		o.Ordering = "ASC"
-		assert.Equal(t, "SELECT orders.*, IFNULL(SUM(t.price * t.quantity)/SUM(t.quantity), orders.price) AS average_price FROM orders LEFT JOIN trades AS t ON (t.order_id = orders.order_id) GROUP BY orders.gid  ORDER BY orders.gid ASC LIMIT 500", genOrderSQL("sqlite", o))
+		assert.Equal(t, "SELECT orders.*, IFNULL(SUM(t.price * t.quantity)/SUM(t.quantity), orders.price) AS average_price FROM orders LEFT JOIN trades AS t ON (t.order_id = orders.order_id) GROUP BY orders.gid  ORDER BY orders.gid ASC LIMIT 500", genOrderSQL("sqlite", "orders", o))
 		o.Ordering = "DESC"
-		assert.Equal(t, "SELECT orders.*, IFNULL(SUM(t.price * t.quantity)/SUM(t.quantity), orders.price) AS average_price FROM orders LEFT JOIN trades AS t ON (t.order_id = orders.order_id) GROUP BY orders.gid  ORDER BY orders.gid DESC LIMIT 500", genOrderSQL("sqlite", o))
+		assert.Equal(t, "SELECT orders.*, IFNULL(SUM(t.price * t.quantity)/SUM(t.quantity), orders.price) AS average_price FROM orders LEFT JOIN trades AS t ON (t.order_id = orders.order_id) GROUP BY orders.gid  ORDER BY orders.gid DESC LIMIT 500", genOrderSQL("sqlite", "orders", o))
 	})
 
 	t.Run("with since and until", func(t *testing.T) {
@@ -31,7 +31,7 @@ func Test_genOrderSQL(t *testing.T) {
 			Since:    &since,
 			Until:    &until,
 		}
-		sql := genOrderSQL("sqlite", o)
+		sql := genOrderSQL("sqlite", "orders", o)
 		assert.Contains(t, sql, "orders.created_at >= :since")
 		assert.Contains(t, sql, "orders.created_at < :until")
 		assert.Contains(t, sql, "orders.exchange = :exchange")
@@ -43,14 +43,14 @@ func Test_genOrderSQL(t *testing.T) {
 		o := QueryOrdersOptions{
 			Since: &since,
 		}
-		sql := genOrderSQL("sqlite", o)
+		sql := genOrderSQL("sqlite", "orders", o)
 		assert.Contains(t, sql, "orders.created_at >= :since")
 		assert.NotContains(t, sql, ":until")
 	})
 
 	t.Run("custom limit", func(t *testing.T) {
 		o := QueryOrdersOptions{Limit: 100}
-		sql := genOrderSQL("sqlite", o)
+		sql := genOrderSQL("sqlite", "orders", o)
 		assert.Contains(t, sql, "LIMIT 100")
 	})
 
