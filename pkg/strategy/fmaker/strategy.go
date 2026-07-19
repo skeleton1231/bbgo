@@ -276,9 +276,6 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 
 	outlook := 1
 
-	// futuresMode := s.session.Futures || s.session.IsolatedFutures
-	cnt := 0
-
 	// var prevEr float64
 	session.MarketDataStream.OnKLineClosed(func(kline types.KLine) {
 
@@ -297,8 +294,17 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 			log.WithError(err).Errorf("graceful cancel order error")
 		}
 
-		cnt += 1
-		if cnt < 15+1+outlook {
+		// Gate on actual indicator Values length, not raw kline count. The
+		// EWMA/SMA streams only append to .Values once their window fills, so
+		// a kline count would over-state available data and the
+		// len-i-outlook indexing below goes negative. All these indicators are
+		// driven by the same kline stream, so once each has >= 15+outlook values
+		// the regression window is safe.
+		need := 15 + outlook
+		if len(s.S0.Values) < need || len(s.S1.Values) < need || len(s.S2.Values) < need ||
+			len(s.S4.Values) < need || len(s.S5.Values) < need || len(s.S6.Values) < need ||
+			len(s.S7.Values) < need || len(s.A2.Values) < need || len(s.A3.Values) < need ||
+			len(s.A18.Values) < need || len(s.A34.Values) < need || len(s.R.Values) < 15 {
 			return
 		}
 

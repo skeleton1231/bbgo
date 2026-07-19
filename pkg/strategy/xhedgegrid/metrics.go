@@ -50,7 +50,7 @@ func initMetrics(extendedLabels []string) {
 
 	metricsGridNum = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "bbgo_grid2_num",
+			Name: "bbgo_xhedgegrid_num",
 			Help: "number of grids",
 		},
 		append([]string{
@@ -61,7 +61,7 @@ func initMetrics(extendedLabels []string) {
 
 	metricsGridNumOfOrders = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "bbgo_grid2_num_of_orders",
+			Name: "bbgo_xhedgegrid_num_of_orders",
 			Help: "number of orders",
 		},
 		append([]string{
@@ -72,7 +72,7 @@ func initMetrics(extendedLabels []string) {
 
 	metricsGridNumOfOrdersWithCorrectPrice = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "bbgo_grid2_num_of_correct_price_orders",
+			Name: "bbgo_xhedgegrid_num_of_correct_price_orders",
 			Help: "number of orders with correct grid prices",
 		},
 		append([]string{
@@ -83,7 +83,7 @@ func initMetrics(extendedLabels []string) {
 
 	metricsGridNumOfMissingOrders = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "bbgo_grid2_num_of_missing_orders",
+			Name: "bbgo_xhedgegrid_num_of_missing_orders",
 			Help: "number of missing orders",
 		},
 		append([]string{
@@ -94,7 +94,7 @@ func initMetrics(extendedLabels []string) {
 
 	metricsGridNumOfMissingOrdersWithCorrectPrice = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "bbgo_grid2_num_of_missing_correct_price_orders",
+			Name: "bbgo_xhedgegrid_num_of_missing_correct_price_orders",
 			Help: "number of missing orders with correct prices",
 		},
 		append([]string{
@@ -105,7 +105,7 @@ func initMetrics(extendedLabels []string) {
 
 	metricsGridProfit = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "bbgo_grid2_profit",
+			Name: "bbgo_xhedgegrid_profit",
 			Help: "realized grid profit",
 		},
 		append([]string{
@@ -116,7 +116,7 @@ func initMetrics(extendedLabels []string) {
 
 	metricsGridUpperPrice = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "bbgo_grid2_upper_price",
+			Name: "bbgo_xhedgegrid_upper_price",
 			Help: "the upper price of grid",
 		},
 		append([]string{
@@ -127,7 +127,7 @@ func initMetrics(extendedLabels []string) {
 
 	metricsGridLowerPrice = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "bbgo_grid2_lower_price",
+			Name: "bbgo_xhedgegrid_lower_price",
 			Help: "the lower price of grid",
 		},
 		append([]string{
@@ -138,7 +138,7 @@ func initMetrics(extendedLabels []string) {
 
 	metricsGridQuoteInvestment = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "bbgo_grid2_quote_investment",
+			Name: "bbgo_xhedgegrid_quote_investment",
 			Help: "the quote investment of grid",
 		},
 		append([]string{
@@ -149,7 +149,7 @@ func initMetrics(extendedLabels []string) {
 
 	metricsGridBaseInvestment = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "bbgo_grid2_base_investment",
+			Name: "bbgo_xhedgegrid_base_investment",
 			Help: "the base investment of grid",
 		},
 		append([]string{
@@ -160,7 +160,7 @@ func initMetrics(extendedLabels []string) {
 
 	metricsGridFilledOrderPrice = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "bbgo_grid2_filled_order_price",
+			Name: "bbgo_xhedgegrid_filled_order_price",
 			Help: "the price of filled grid order",
 		},
 		append([]string{
@@ -172,7 +172,7 @@ func initMetrics(extendedLabels []string) {
 
 	metricsNumOfOpenOrders = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "bbgo_grid2_num_of_open_orders",
+			Name: "bbgo_xhedgegrid_num_of_open_orders",
 			Help: "number of open orders",
 		},
 		append([]string{

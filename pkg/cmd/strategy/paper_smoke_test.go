@@ -118,15 +118,15 @@ var paperSmokeSkip = map[string]string{
 	"dca3": "MAX-only (QueryClosedOrdersDesc); paper is binance-only => fundamentally incompatible",
 
 	// Strategy bugs surfaced by the harness — investigate & fix (Phase 2).
-	"fmaker":        "EmitKLineClosed index out of range [-2]: indicator indexed before warmup (Phase 2)",
-	"scmaker":       "Run derefs multiple core optional pointers (LiquiditySlideRule.Scale + MidPriceEMA/PriceRangeBollinger) without nil-guard; 2 guards added, needs comprehensive hardening or full config (Phase 2)",
+	"scmaker":       "requires full liquidity config (LiquiditySlideRule + bollinger) to run meaningfully; minimal-config smoke not applicable. MidPriceEMA/PriceRangeBollinger nil-guards added (real hardening) (Phase 2)",
 	"liqmaker":      "Run nil-deref: needs investigation (Phase 2) (alias of liquiditymaker, also Phase 3 depth)",
 
 	// Test-isolation: xhedgegrid registers a prometheus metrics collector by a
 	// fixed name; in a shared test process running many strategies this collides
 	// with a prior registration. Fix: unique collector names or sub-process
 	// isolation (Phase 2).
-	"xhedgegrid": "duplicate prometheus collector registration in shared test process (Phase 2)",
+	// (xhedgegrid unblocked 2026-07-19: renamed metric namespace bbgo_grid2_ ->
+	// bbgo_xhedgegrid_ so it no longer collides with grid2's copy-pasted names.)
 }
 
 // registryDefaults holds the strategy_registry defaults JSON (sourced from
