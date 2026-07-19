@@ -2,16 +2,11 @@ package binance
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
 	"fmt"
 	"net"
-	"net/url"
-	"strconv"
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/sirupsen/logrus"
 
 	"github.com/c9s/bbgo/pkg/depth"
@@ -21,7 +16,6 @@ import (
 	"github.com/adshao/go-binance/v2"
 	"github.com/adshao/go-binance/v2/futures"
 
-	api "github.com/c9s/bbgo/pkg/exchange/binance/binanceapi"
 	"github.com/c9s/bbgo/pkg/types"
 )
 
@@ -65,12 +59,6 @@ type ListenTokenSubscribeParams struct {
 	ListenToken string `json:"listenToken"`
 }
 
-type SubscribeSignatureParams struct {
-	APIKey    string `json:"apiKey"`
-	Timestamp int64  `json:"timestamp"`
-	Signature string `json:"signature"`
-}
-
 type RiskBalance struct {
 	Currency string
 	Borrowed fixedpoint.Value
@@ -107,6 +95,9 @@ type Stream struct {
 	markPriceUpdateEventCallbacks       []func(e *MarkPriceUpdateEvent)
 	continuousKLineEventCallbacks       []func(e *ContinuousKLineEvent)
 	continuousKLineClosedEventCallbacks []func(e *ContinuousKLineEvent)
+	indexPriceKLineEventCallbacks       []func(e *IndexPriceKLineEvent)
+	indexPriceKLineCallbacks            []func(kline types.KLine)
+	indexPriceKLineClosedCallbacks      []func(kline types.KLine)
 
 	// futures user data stream event callbacks
 	orderTradeUpdateEventCallbacks    []func(e *OrderTradeUpdateEvent)
@@ -115,6 +106,7 @@ type Stream struct {
 	marginCallEventCallbacks          []func(e *MarginCallEvent)
 	listenKeyExpiredCallbacks         []func(e *ListenKeyExpired)
 	algoOrderUpdateEventCallbacks     []func(e *AlgoOrderUpdateEvent)
+	serverShutdownEventCallbacks      []func(e *ServerShutdownEvent)
 
 	errorCallbacks []func(e *ErrorEvent)
 
@@ -190,7 +182,7 @@ func NewStream(ex *Exchange, client *binance.Client, futuresClient *futures.Clie
 			Bids:   e.Bids,
 			Asks:   e.Asks,
 		}, e.FirstUpdateID, e.FinalUpdateID, e.PreviousUpdateID); err != nil {
-			log.WithError(err).Warnf("found missing %s update event", e.Symbol)
+			log.WithError(err).Errorf("found missing %s update event", e.Symbol)
 		}
 	})
 
@@ -199,6 +191,7 @@ func NewStream(ex *Exchange, client *binance.Client, futuresClient *futures.Clie
 	stream.OnBookTickerEvent(stream.handleBookTickerEvent)
 	stream.OnExecutionReportEvent(stream.handleExecutionReportEvent)
 	stream.OnContinuousKLineEvent(stream.handleContinuousKLineEvent)
+	stream.OnIndexPriceKLineEvent(stream.handleIndexPriceKLineEvent)
 	stream.OnMarketTradeEvent(stream.handleMarketTradeEvent)
 	stream.OnAggTradeEvent(stream.handleAggTradeEvent)
 	stream.OnForceOrderEvent(stream.handleForceOrderEvent)
@@ -222,6 +215,10 @@ func NewStream(ex *Exchange, client *binance.Client, futuresClient *futures.Clie
 	stream.SetBeforeConnect(stream.handleBeforeConnect)
 	stream.OnListenKeyExpired(func(e *ListenKeyExpired) {
 		log.Warnf("listen key expired, triggering reconnect: %+v", e)
+		stream.Reconnect()
+	})
+	stream.OnServerShutdownEvent(func(e *ServerShutdownEvent) {
+		log.Warnf("the server is about to shutdown soon, triggering reconnect: %+v", e)
 		stream.Reconnect()
 	})
 	return stream
@@ -270,74 +267,6 @@ func (s *Stream) handleBeforeConnect(ctx context.Context) error {
 	return nil
 }
 
-func (s *Stream) handleConnect() {
-	if s.PublicOnly {
-		if s.exchange.IsFutures {
-			// Determine which subscriptions to send on the main connection:
-			//   - mixed or market-only → main conn is /market → send futuresMarketSubs
-			//   - public-only (depth/bookTicker only) → main conn is /public → send futuresPublicSubs
-			mainSubs := s.futuresMarketSubs
-			if s.futuresAuxStream == nil && len(s.futuresPublicSubs) > 0 {
-				mainSubs = s.futuresPublicSubs
-			}
-			if err := s.writeSpecificSubscriptions(s.Conn, mainSubs); err != nil {
-				log.WithError(err).Error("futures subscribe error")
-			}
-			// if mixed subscriptions, connect aux stream to /public independently
-			if s.futuresAuxStream != nil {
-				connCtx := s.ConnCtx
-				go func() {
-					if err := s.futuresAuxStream.DialAndConnect(connCtx); err != nil {
-						log.WithError(err).Error("futures aux stream (/public) connect error")
-					}
-				}()
-			}
-		} else {
-			if err := s.writeSubscriptions(); err != nil {
-				log.WithError(err).Error("subscribe error")
-			}
-		}
-	} else if s.canUseWsApiEndpoint() {
-		if s.ed25519authentication.usingEd25519 {
-			if err := s.sendEd25519LoginCommand(); err != nil {
-				log.WithError(err).Error("ed25519 auth error")
-			}
-			time.Sleep(1 * time.Second)
-
-			if !s.exchange.IsFutures {
-				if err := s.sendSubscribeUserDataStreamCommand(); err != nil {
-					log.WithError(err).Error("subscribe user data stream error")
-				}
-			}
-		} else {
-			// HMAC key: use userDataStream.subscribe.signature (no session.logon needed)
-			if err := s.sendSubscribeUserDataStreamSignatureCommand(); err != nil {
-				log.WithError(err).Error("subscribe user data stream (signature) error")
-			}
-		}
-
-		go s.EmitAuth()
-	} else if !s.exchange.useListenKey && s.exchange.IsMargin {
-		// Skip subscription if listenToken is missing or expired
-		if len(s.listenToken) == 0 || time.Now().After(s.listenTokenExpiration) {
-			return
-		}
-
-		// Use new listenToken subscription method (recommended as of 2025-10-06)
-		// This still uses the WebSocket API endpoint but with listenToken instead of ed25519 auth
-		if err := s.sendListenTokenSubscribeCommand(); err != nil {
-			log.WithError(err).Error("listenToken subscribe error")
-		}
-
-		go s.EmitAuth()
-	} else {
-		// Emit Auth before establishing the connection to prevent the caller from missing the Update data after
-		// creating the order.
-		// spawn a goroutine to emit auth event to prevent blocking the main event loop
-		go s.EmitAuth()
-	}
-}
-
 // Close closes the stream and, if present, the auxiliary futures /public stream.
 func (s *Stream) Close() error {
 	s.ConnLock.Lock()
@@ -350,91 +279,6 @@ func (s *Stream) Close() error {
 		}
 	}
 	return s.StandardStream.Close()
-}
-
-// sendEd25519LoginCommand
-// Sample response:
-//
-//	  {"id":1,"status":200,"result":{"apiKey":".....",
-//		  "authorizedSince":1746456891079,
-//		  "connectedSince":1746456891107,
-//		  "returnRateLimits":true,
-//		  "serverTime":1746456891153,"userDataStream":false},
-//		"rateLimits":[{"rateLimitType":"REQUEST_WEIGHT","interval":"MINUTE","intervalNum":1,"limit":6000,"count":14}]}
-func (s *Stream) sendEd25519LoginCommand() error {
-	timestamp := time.Now().UnixMilli()
-	params := url.Values{}
-	params.Add("apiKey", s.client.APIKey)
-	params.Add("timestamp", strconv.FormatInt(timestamp, 10))
-	paramsStr := params.Encode()
-	signature := api.GenerateSignatureEd25519(paramsStr, s.ed25519authentication.privateKey)
-	return s.Conn.WriteJSON(&WebSocketCommand{
-		Method: "session.logon",
-		ID:     1,
-		Params: &LogonParams{
-			APIKey:    s.client.APIKey,
-			Signature: signature,
-			Timestamp: timestamp,
-		},
-	})
-}
-
-func (s *Stream) sendSubscribeUserDataStreamCommand() error {
-	return s.Conn.WriteJSON(&WebSocketCommand{
-		ID:     2,
-		Method: "userDataStream.subscribe",
-	})
-}
-
-func (s *Stream) sendSubscribeUserDataStreamSignatureCommand() error {
-	timestamp := time.Now().UnixMilli()
-	params := url.Values{}
-	params.Add("apiKey", s.client.APIKey)
-	params.Add("timestamp", strconv.FormatInt(timestamp, 10))
-	paramsStr := params.Encode()
-	mac := hmac.New(sha256.New, []byte(s.exchange.secret))
-	mac.Write([]byte(paramsStr))
-	signature := fmt.Sprintf("%x", mac.Sum(nil))
-	return s.Conn.WriteJSON(&WebSocketCommand{
-		ID:     2,
-		Method: "userDataStream.subscribe.signature",
-		Params: &SubscribeSignatureParams{
-			APIKey:    s.client.APIKey,
-			Timestamp: timestamp,
-			Signature: signature,
-		},
-	})
-}
-
-// sendListenTokenSubscribeCommand sends the new listenToken subscription command (2025-10-06 recommended)
-func (s *Stream) sendListenTokenSubscribeCommand() error {
-	return s.Conn.WriteJSON(&WebSocketCommand{
-		ID:     2,
-		Method: "userDataStream.subscribe.listenToken",
-		Params: ListenTokenSubscribeParams{
-			ListenToken: s.listenToken,
-		},
-	})
-}
-
-// writeSpecificSubscriptions sends a SUBSCRIBE command for a given set of subscriptions
-// on the provided connection. Returns nil without writing if subs is empty or conn is nil.
-func (s *Stream) writeSpecificSubscriptions(conn *websocket.Conn, subs []types.Subscription) error {
-	if len(subs) == 0 {
-		return nil
-	}
-	var params []string
-	for _, subscription := range subs {
-		params = append(params, convertSubscription(subscription))
-	}
-	// TODO: handle subscribe response
-	// sample response: {"result":null,"id":2}
-	log.Infof("subscribing channels: %+v", params)
-	return conn.WriteJSON(&WebSocketCommand{
-		Method: "SUBSCRIBE",
-		Params: params,
-		ID:     2,
-	})
 }
 
 // writeSubscriptions sends a SUBSCRIBE command for all of s.Subscriptions.
@@ -471,11 +315,21 @@ func (s *Stream) handleContinuousKLineEvent(e *ContinuousKLineEvent) {
 	}
 }
 
+func (s *Stream) handleIndexPriceKLineEvent(e *IndexPriceKLineEvent) {
+	kline := e.KLine.KLine()
+	kline.Symbol = e.Symbol // "k.s" is a Binance placeholder, not the real pair
+	if e.KLine.Closed {
+		s.EmitIndexPriceKLineClosed(kline)
+	} else {
+		s.EmitIndexPriceKLine(kline)
+	}
+}
+
 func (s *Stream) handleExecutionReportEvent(e *ExecutionReportEvent) {
 	switch e.CurrentExecutionType {
 
 	case "NEW", "CANCELED", "REJECTED", "EXPIRED", "REPLACED":
-		order, err := e.Order()
+		order, err := e.Order(s.exchange.IsMargin, s.exchange.IsIsolatedMargin)
 		if err != nil {
 			log.WithError(err).Errorf("order convert error: %+v", e)
 			return
@@ -484,7 +338,10 @@ func (s *Stream) handleExecutionReportEvent(e *ExecutionReportEvent) {
 		s.EmitOrderUpdate(*order)
 
 	case "TRADE":
-		trade, err := e.Trade()
+		trade, err := e.Trade(
+			s.exchange.IsMargin,
+			s.exchange.IsIsolatedMargin,
+		)
 		if err != nil {
 			log.WithError(err).Errorf("trade convert error: %+v", e)
 			return
@@ -492,7 +349,10 @@ func (s *Stream) handleExecutionReportEvent(e *ExecutionReportEvent) {
 
 		s.EmitTradeUpdate(*trade)
 
-		order, err := e.Order()
+		order, err := e.Order(
+			s.exchange.IsMargin,
+			s.exchange.IsIsolatedMargin,
+		)
 		if err != nil {
 			log.WithError(err).Errorf("order convert error: %+v", e)
 			return
@@ -572,7 +432,7 @@ func (s *Stream) handleOrderTradeUpdateEvent(e *OrderTradeUpdateEvent) {
 		log.Warnf("ExecutionReport %s: %+v", e.OrderTrade.CurrentExecutionType, e)
 
 	case "NEW", "CANCELED", "EXPIRED":
-		order, err := e.OrderFutures()
+		order, err := e.OrderFutures(s.exchange.IsIsolatedFutures)
 		if err != nil {
 			log.WithError(err).Error("futures order convert error")
 			return
@@ -581,7 +441,7 @@ func (s *Stream) handleOrderTradeUpdateEvent(e *OrderTradeUpdateEvent) {
 		s.EmitOrderUpdate(*order)
 
 	case "TRADE":
-		trade, err := e.TradeFutures()
+		trade, err := e.TradeFutures(s.exchange.IsIsolatedFutures)
 		if err != nil {
 			log.WithError(err).Error("futures trade convert error")
 			return
@@ -589,7 +449,7 @@ func (s *Stream) handleOrderTradeUpdateEvent(e *OrderTradeUpdateEvent) {
 
 		s.EmitTradeUpdate(*trade)
 
-		order, err := e.OrderFutures()
+		order, err := e.OrderFutures(s.exchange.IsIsolatedFutures)
 		if err != nil {
 			log.WithError(err).Error("futures order convert error")
 			return
@@ -648,16 +508,6 @@ func (s *Stream) getUserDataStreamEndpointUrl(listenKey string) string {
 	return u + "/" + listenKey
 }
 
-// canUseWsApiEndpoint returns true if the stream should use the WebSocket API endpoint
-// for user data stream subscription. Both Ed25519 and HMAC keys are supported on spot.
-func (s *Stream) canUseWsApiEndpoint() bool {
-	if s.exchange.MarginSettings.IsMargin || s.exchange.FuturesSettings.IsFutures {
-		return false
-	}
-
-	return true
-}
-
 func (s *Stream) createEndpoint(ctx context.Context) (string, error) {
 	if s.PublicOnly {
 		return s.getPublicEndpointUrl(), nil
@@ -672,21 +522,12 @@ func (s *Stream) createEndpoint(ctx context.Context) (string, error) {
 		return WsSpotWebSocketURL, nil
 	}
 
-	endpoint, err := s.createUserDataStreamEndpoint(ctx)
-	if err != nil && testNet {
-		log.WithError(err).Warn("user data stream endpoint creation failed on testnet, falling back to public-only stream")
-		return s.getPublicEndpointUrl(), nil
-	}
-	return endpoint, err
+	return s.createUserDataStreamEndpoint(ctx)
 }
 
 func (s *Stream) createUserDataStreamEndpoint(ctx context.Context) (string, error) {
-	if s.exchange.useListenKey {
-		return s.createUserDataStreamEndpointWithListenKey(ctx)
-	}
-
-	// Prefer listenToken for margin and testnet (listenKey REST endpoint removed from testnet 2025-05)
-	if s.exchange.IsMargin || testNet {
+	// Use new listenToken method (recommended as of 2025-10-06)
+	if s.exchange.IsMargin && !s.exchange.useListenKey {
 		return s.createUserDataStreamEndpointWithListenToken(ctx)
 	}
 
@@ -698,6 +539,10 @@ func (s *Stream) createUserDataStreamEndpointWithListenKey(ctx context.Context) 
 	listenKey, err := s.fetchListenKey(ctx)
 	if err != nil {
 		return "", err
+	}
+	// listenKey is empty -> spot trading
+	if listenKey == "" {
+		return WsSpotWebSocketURL, nil
 	}
 
 	debug("listen key is created, starting listen key keep alive worker: %s", util.MaskKey(listenKey))
@@ -763,6 +608,9 @@ func (s *Stream) dispatchEvent(e interface{}) {
 	case *ContinuousKLineEvent:
 		s.EmitContinuousKLineEvent(e)
 
+	case *IndexPriceKLineEvent:
+		s.EmitIndexPriceKLineEvent(e)
+
 	case *OrderTradeUpdateEvent:
 		s.EmitOrderTradeUpdateEvent(e)
 
@@ -777,16 +625,10 @@ func (s *Stream) dispatchEvent(e interface{}) {
 
 	case *ForceOrderEvent:
 		s.EmitForceOrderEvent(e)
-
-	case *ResultEvent:
-		if e.Error != nil {
-			log.Errorf("WebSocket API response error: id=%d status=%d code=%d msg=%s", e.ID, e.Status, e.Error.Code, e.Error.Message)
-		} else {
-			log.Infof("WebSocket API response: id=%d status=%d result=%+v", e.ID, e.Status, e.Result)
-		}
-
 	case *AlgoOrderUpdateEvent:
 		s.EmitAlgoOrderUpdateEvent(e)
+	case *ServerShutdownEvent:
+		s.EmitServerShutdownEvent(e)
 
 	case *MarginCallEvent:
 	}
@@ -835,8 +677,11 @@ func (s *Stream) fetchListenKey(ctx context.Context) (string, error) {
 		return req.Do(ctx)
 	}
 
+	// listenKey is removed for spot trading (POST /api/v3/userDataStream)
+	// See: https://www.binance.com/en/support/announcement/detail/80b38c8954bf4965b21eeb3c5fc6edfa
 	debug("spot mode is enabled, requesting user stream listen key...")
-	return s.client.NewStartUserStreamService().Do(ctx)
+	// return s.client.NewStartUserStreamService().Do(ctx)
+	return "", nil
 }
 
 func (s *Stream) keepaliveListenKey(ctx context.Context, listenKey string) error {
@@ -1000,7 +845,11 @@ func (s *Stream) listenKeyKeepAlive(ctx context.Context, listenKey string) {
 }
 
 func (s *Stream) handleAlgoOrderUpdateEvent(e *AlgoOrderUpdateEvent) {
-	order, err := e.OrderFutures()
+	order, err := e.OrderFutures(
+		s.exchange.IsFutures,
+		s.exchange.IsMargin,
+		s.exchange.IsIsolatedFutures || s.exchange.IsIsolatedMargin,
+	)
 	if err != nil {
 		log.WithError(err).Error("algo order convert error")
 		return

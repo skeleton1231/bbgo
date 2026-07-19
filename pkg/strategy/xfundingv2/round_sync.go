@@ -34,9 +34,11 @@ func (r *ArbitrageRound) Initialize(ctx context.Context, s *Strategy) error {
 		},
 	)
 	r.retryTransferTickC = make(chan time.Time, 100)
-	if r.HasStarted() {
+	if r.hasStarted() {
 		// the round has been started before, we need to start the retry worker
 		go r.retryTransferWorker(ctx, r.retryTransferTickC)
+		r.spotSession = s.spotSession
+		r.futuresSession = s.futuresSession
 	}
 	if service, ok := s.futuresSession.Exchange.(FuturesService); ok {
 		r.futuresService = service
@@ -63,15 +65,21 @@ func (r *ArbitrageRound) Initialize(ctx context.Context, s *Strategy) error {
 		// the restored round should always have the futures worker restored as well.
 		return errors.New("[ArbitrageRound] futures worker is nil")
 	}
+	r.rebalanceInterval = s.RoundRebalanceInterval.Duration()
 
 	return nil
 }
 
 type ArbitrageRoundSyncState struct {
+	ID string `json:"id"`
+
 	TriggeredFundingRate        fixedpoint.Value     `json:"triggeredFundingRate"`
 	TriggeredSpotTargetPosition fixedpoint.Value     `json:"triggeredSpotTargetPosition"`
+	TransferInAmount            fixedpoint.Value     `json:"transferInAmount"`
+	TransferOutAmount           fixedpoint.Value     `json:"transferOutAmount"`
 	MinHoldingIntervals         int                  `json:"minHoldingIntervals"`
 	FundingIntervalHours        int                  `json:"fundingIntervalHours"`
+	Leverage                    fixedpoint.Value     `json:"leverage"`
 	FundingIntervalStart        time.Time            `json:"fundingIntervalStart"`
 	FundingIntervalEnd          time.Time            `json:"fundingIntervalEnd"`
 	FundingFeeRecords           map[int64]FundingFee `json:"fundingFeeRecords"`
@@ -79,26 +87,35 @@ type ArbitrageRoundSyncState struct {
 	Symbol              string             `json:"symbol"`
 	SpotExchangeName    types.ExchangeName `json:"spotExchangeName"`
 	FuturesExchangeName types.ExchangeName `json:"futuresExchangeName"`
-	Asset               string             `json:"asset"` // base asset, e.g. "BTC"
+	DirectionPolicy     directionPolicy    `json:"directionPolicy"`
 
 	SpotFeeAssetAmount    fixedpoint.Value `json:"spotFeeAssetAmount"`
 	FuturesFeeAssetAmount fixedpoint.Value `json:"futuresFeeAssetAmount"`
 	FeeSymbol             string           `json:"feeSymbol"`
 	AvgFeeCost            fixedpoint.Value `json:"avgFeeCost"`
 
-	RetryDuration    time.Duration             `json:"retryDuration"`
-	RetryTransfers   map[uint64]*transferRetry `json:"retryTransfers"`
-	SyncedSpotTrades map[uint64]struct{}       `json:"syncedSpotTrades"`
+	RetryDuration       time.Duration             `json:"retryDuration"`
+	RetryTransfers      map[uint64]*transferRetry `json:"retryTransfers"`
+	SyncedSpotTrades    map[uint64]struct{}       `json:"syncedSpotTrades"`
+	SyncedFuturesTrades map[uint64]struct{}       `json:"syncedFuturesTrades"`
 
 	State RoundState `json:"state"`
 
-	// StartTime is the time when the round is started
-	StartTime time.Time `json:"startTime"`
-	// ClosingTime is the time when the round is entered closing state
-	ClosingTime     time.Time     `json:"closingTime"`
-	ClosingDuration time.Duration `json:"closingDuration"`
+	// StartAt is the time when the round is started
+	StartAt time.Time `json:"startAt"`
+	// ClosingAt is the time when the round is entered closing state
+	ClosingAt       time.Time      `json:"closingAt"`
+	ClosingDuration types.Duration `json:"closingDuration"`
 	// LastUpdateTime is the last time when the round is updated
 	LastUpdateTime time.Time `json:"lastUpdateTime"`
+
+	// ReadyAt is the time when the round enters ready state
+	ReadyAt time.Time `json:"readyAt"`
+
+	// ClosedAt is the time when the round is closed
+	ClosedAt time.Time `json:"closedAt"`
+
+	LargeDeviationStartTime time.Time `json:"largeDeviationStartTime"`
 }
 
 func (r *ArbitrageRound) MarshalJSON() ([]byte, error) {
@@ -111,7 +128,7 @@ func (r *ArbitrageRound) MarshalJSON() ([]byte, error) {
 		SpotWorker:    r.spotWorker,
 		FuturesWorker: r.futuresWorker,
 	}
-	return json.Marshal(v)
+	return json.Marshal(&v)
 }
 
 func (r *ArbitrageRound) UnmarshalJSON(b []byte) error {

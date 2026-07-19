@@ -8,20 +8,24 @@ import (
 	"time"
 
 	sq "github.com/Masterminds/squirrel"
+	"github.com/c9s/bbgo/pkg/exchange/batch"
 	"github.com/c9s/bbgo/pkg/types"
 	"github.com/jmoiron/sqlx"
 )
 
+type ExchangeFuturesService interface {
+	types.ExchangeRiskService
+	types.ExchangeFundingFeeService
+}
+
 type FuturesService struct {
 	DB                         *sqlx.DB
 	TablePrefix                string
-	PositionRiskUpdateInterval time.Duration
 	UserID                     string
+	PositionRiskUpdateInterval time.Duration
 
 	positionRiskLastUpdateTime map[string]time.Time
 }
-
-func (s *FuturesService) tableName(base string) string { return s.TablePrefix + base }
 
 func NewFuturesService(db *sqlx.DB) *FuturesService {
 	return &FuturesService{
@@ -31,9 +35,10 @@ func NewFuturesService(db *sqlx.DB) *FuturesService {
 }
 
 func (s *FuturesService) QueryPositionsAndInsert(
-	ctx context.Context, exchange types.ExchangeRiskService, currentTime time.Time, symbol ...string) error {
+	ctx context.Context, exchange ExchangeFuturesService, currentTime time.Time, symbol ...string) error {
 	symbolStr := "*"
 	if len(symbol) > 0 {
+		// sort to ensure the symbolStr is the same for the same set of symbols
 		sort.Slice(symbol, func(i, j int) bool {
 			return symbol[i] < symbol[j]
 		})
@@ -62,7 +67,7 @@ func (s *FuturesService) QueryPositionsAndInsert(
 
 	for _, risk := range risks {
 		risk.UpdateTime = types.MillisecondTimestamp(time.Now())
-		if err := s.Insert(risk); err != nil {
+		if err := s.InsertPositionRisk(risk); err != nil {
 			return fmt.Errorf("failed to insert position risk (%+v): %w", risk, err)
 		}
 	}
@@ -76,39 +81,67 @@ type QueryFuturesPositionRiskOptions struct {
 }
 
 func (s *FuturesService) Sync(
-	ctx context.Context, service types.ExchangeRiskService, symbol string,
+	ctx context.Context, service ExchangeFuturesService, symbol string, startTime, endTime time.Time,
 ) error {
-	if s.DB == nil {
-		return nil
-	}
+	// TODO: sync the position history of the given time range
+	// we only sync the lastest position risk record for now.
+	// Binance does not provide the position risk history API for the time being.
 	risks, err := service.QueryPositionRisk(ctx, symbol)
 	if err != nil {
 		return fmt.Errorf("failed to query position risk: %w", err)
 	}
-	if len(risks) == 0 {
-		return nil
+	if len(risks) > 0 {
+		risk := risks[0]
+		risk.UpdateTime = types.MillisecondTimestamp(time.Now())
+		if err := s.InsertPositionRisk(risk); err != nil {
+			return fmt.Errorf("failed to insert position risk (%+v): %w", risk, err)
+		}
 	}
 
-	risk := risks[0]
-	risk.UpdateTime = types.MillisecondTimestamp(time.Now())
-	if err := s.Insert(risk); err != nil {
-		return fmt.Errorf("failed to insert position risk (%+v): %w", risk, err)
+	// sync the funding fee history
+	query := batch.FuturesFundingFeeBatchQuery{
+		ExchangeFundingFeeService: service,
+	}
+	feeC, errC := query.Query(ctx, symbol, startTime, endTime)
+	keepRunning := true
+	for keepRunning {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case fee, ok := <-feeC:
+			if !ok {
+				keepRunning = false
+				continue
+			}
+
+			if err := s.InsertFundingFee(fee); err != nil {
+				return fmt.Errorf("failed to insert funding fee (%+v): %w", fee, err)
+			}
+		case err, ok := <-errC:
+			if !ok {
+				keepRunning = false
+				continue
+			}
+			if err != nil {
+				return fmt.Errorf("failed to query funding fee: %w", err)
+			}
+		}
 	}
 	return nil
 }
 
-func (s *FuturesService) Query(options QueryFuturesPositionRiskOptions) ([]types.PositionRisk, error) {
-	tableName := s.tableName("futures_position_risks")
+func (s *FuturesService) QueryPositionRisks(options QueryFuturesPositionRiskOptions) ([]types.PositionRisk, error) {
+	columns := fieldsNamesOf(types.PositionRisk{})
 	builder := sq.
-		Select("*").
-		From(tableName).
+		Select(columns...).
+		From("futures_position_risks").
 		Where(sq.Eq{"exchange": options.Exchange, "symbol": options.Symbol}).
 		OrderBy("updated_at DESC")
 	sql, args, err := builder.ToSql()
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.DB.Queryx(s.DB.Rebind(sql), args...)
+	rows, err := s.DB.Queryx(sql, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -127,81 +160,90 @@ func (s *FuturesService) Query(options QueryFuturesPositionRiskOptions) ([]types
 	return risks, nil
 }
 
-func (s *FuturesService) Insert(risk types.PositionRisk) (err error) {
-	tableName := s.tableName("futures_position_risks")
+func (s *FuturesService) InsertPositionRisk(risk types.PositionRisk) (err error) {
+	sql := `
+	INSERT INTO futures_position_risks (
+		exchange, symbol, position_side, entry_price, leverage, liquidation_price,
+		mark_price, break_even_price, unrealized_pnl, notional, initial_margin, maint_margin,
+		position_initial_margin, open_order_initial_margin, adl, margin_asset,
+		position_amount, updated_at
+	) VALUES (
+		:exchange, :symbol, :position_side, :entry_price, :leverage, :liquidation_price,
+		:mark_price, :break_even_price, :unrealized_pnl, :notional, :initial_margin, :maint_margin,
+		:position_initial_margin, :open_order_initial_margin, :adl, :margin_asset,
+		:position_amount, :updated_at
+	)`
 
-	switch s.DB.DriverName() {
-	case "mysql":
-		sql := `INSERT INTO ` + tableName + ` (
-			exchange, symbol, position_side, entry_price, leverage, liquidation_price,
-			mark_price, break_even_price, unrealized_pnl, notional, initial_margin, maint_margin,
-			position_initial_margin, open_order_initial_margin, adl, margin_asset,
-			position_amount, updated_at
-		) VALUES (
-			:exchange, :symbol, :position_side, :entry_price, :leverage, :liquidation_price,
-			:mark_price, :break_even_price, :unrealized_pnl, :notional, :initial_margin, :maint_margin,
-			:position_initial_margin, :open_order_initial_margin, :adl, :margin_asset,
-			:position_amount, :updated_at
-		) ON DUPLICATE KEY UPDATE
-			entry_price=:entry_price, leverage=:leverage, liquidation_price=:liquidation_price,
-			mark_price=:mark_price, break_even_price=:break_even_price,
-			unrealized_pnl=:unrealized_pnl, notional=:notional,
-			initial_margin=:initial_margin, maint_margin=:maint_margin,
-			position_initial_margin=:position_initial_margin,
-			open_order_initial_margin=:open_order_initial_margin,
-			adl=:adl, margin_asset=:margin_asset,
-			position_amount=:position_amount, updated_at=:updated_at`
-		_, err = s.DB.NamedExec(sql, risk)
-
-	case "postgres":
-		_, err = s.DB.NamedExec(`INSERT INTO "`+tableName+`" (
-			exchange, symbol, position_side, entry_price, leverage, liquidation_price,
-			mark_price, break_even_price, unrealized_pnl, notional, initial_margin, maint_margin,
-			position_initial_margin, open_order_initial_margin, adl, margin_asset,
-			position_amount, updated_at, strategy_instance_id, user_id
-		) VALUES (
-			:exchange, :symbol, :position_side, :entry_price, :leverage, :liquidation_price,
-			:mark_price, :break_even_price, :unrealized_pnl, :notional, :initial_margin, :maint_margin,
-			:position_initial_margin, :open_order_initial_margin, :adl, :margin_asset,
-			:position_amount, :updated_at, :strategy_instance_id, :user_id
-		)`,
-			map[string]interface{}{
-				"exchange":                  risk.Exchange,
-				"symbol":                    risk.Symbol,
-				"position_side":             risk.PositionSide,
-				"entry_price":               risk.EntryPrice,
-				"leverage":                  risk.Leverage,
-				"liquidation_price":         risk.LiquidationPrice,
-				"mark_price":                risk.MarkPrice,
-				"break_even_price":          risk.BreakEvenPrice,
-				"unrealized_pnl":            risk.UnrealizedPnL,
-				"notional":                  risk.Notional,
-				"initial_margin":            risk.InitialMargin,
-				"maint_margin":              risk.MaintMargin,
-				"position_initial_margin":   risk.PositionInitialMargin,
-				"open_order_initial_margin": risk.OpenOrderInitialMargin,
-				"adl":                       risk.Adl,
-				"margin_asset":              risk.MarginAsset,
-				"position_amount":           risk.PositionAmount,
-				"updated_at":                risk.UpdateTime.Time(),
-				"strategy_instance_id":      risk.StrategyInstanceID,
-				"user_id":                   s.UserID,
-			})
-
-	default: // sqlite3
-		sql := `INSERT INTO ` + tableName + ` (
-			exchange, symbol, position_side, entry_price, leverage, liquidation_price,
-			mark_price, break_even_price, unrealized_pnl, notional, initial_margin, maint_margin,
-			position_initial_margin, open_order_initial_margin, adl, margin_asset,
-			position_amount, updated_at
-		) VALUES (
-			:exchange, :symbol, :position_side, :entry_price, :leverage, :liquidation_price,
-			:mark_price, :break_even_price, :unrealized_pnl, :notional, :initial_margin, :maint_margin,
-			:position_initial_margin, :open_order_initial_margin, :adl, :margin_asset,
-			:position_amount, :updated_at
-		)`
-		_, err = s.DB.NamedExec(sql, risk)
+	if s.DB.DriverName() == "mysql" {
+		sql = fmt.Sprintf(
+			`%s
+		ON DUPLICATE KEY UPDATE exchange=:exchange, symbol=:symbol, position_side=:position_side, updated_at=:updated_at`,
+			sql)
 	}
 
+	_, err = s.DB.NamedExec(sql, risk)
+	return err
+}
+
+type QueryFundingFeeOptions struct {
+	Exchange  string
+	Symbol    string
+	StartTime *time.Time
+	EndTime   *time.Time
+}
+
+func (s *FuturesService) QueryFundingFeeHistory(options QueryFundingFeeOptions) ([]types.FundingFee, error) {
+	columns := fieldsNamesOf(types.FundingFee{})
+	builder := sq.
+		Select(columns...).
+		From("funding_fees").
+		Where(sq.Eq{"exchange": options.Exchange, "symbol": options.Symbol}).
+		OrderBy("time DESC")
+
+	if options.StartTime != nil {
+		builder = builder.Where(sq.GtOrEq{"time": *options.StartTime})
+	}
+	if options.EndTime != nil {
+		builder = builder.Where(sq.LtOrEq{"time": *options.EndTime})
+	}
+
+	sql, args, err := builder.ToSql()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.DB.Queryx(sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var fees []types.FundingFee
+	for rows.Next() {
+		var fee types.FundingFee
+		if err := rows.StructScan(&fee); err != nil {
+			return nil, err
+		}
+
+		fees = append(fees, fee)
+	}
+
+	return fees, nil
+}
+
+func (s *FuturesService) InsertFundingFee(fee types.FundingFee) error {
+	sql := `
+	INSERT INTO funding_fees (
+		exchange, symbol, asset, amount, txn, time
+	) VALUES (
+		:exchange, :symbol, :asset, :amount, :txn, :time
+	)`
+
+	if s.DB.DriverName() == "mysql" {
+		sql = fmt.Sprintf(`%s
+		ON DUPLICATE KEY UPDATE exchange=:exchange, symbol=:symbol, txn=:txn`,
+			sql)
+	}
+
+	_, err := s.DB.NamedExec(sql, fee)
 	return err
 }

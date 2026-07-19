@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/mock/gomock"
 
@@ -47,12 +48,20 @@ func newTestTWAPWorker(
 	session.SetMarkets(map[string]types.Market{
 		"BTCUSDT": market,
 	})
+	// Attach a non-nil account so TWAPWorker.calculateSliceQuantity can query
+	// balances without panicking (mirrors production where session.Account is set).
+	session.Account = types.NewAccount()
 
 	generalExecutor := bbgo.NewGeneralOrderExecutor(session, "BTCUSDT", "test", "test-instance", position)
 
 	ctx := context.Background()
 	worker, err := NewTWAPWorker(ctx, "BTCUSDT", session, generalExecutor, config)
 	assert.NoError(t, err)
+
+	// Attach a logger so methods called directly (without Start) don't panic on a nil logger.
+	logger := logrus.New()
+	logger.SetLevel(logrus.PanicLevel)
+	worker.SetLogger(logger)
 
 	return worker, mockExchange, mockOrderQuery, generalExecutor
 }
@@ -96,10 +105,10 @@ func TestTWAPWorker_FillingOrders(t *testing.T) {
 		defer ctrl.Finish()
 
 		config := TWAPWorkerConfig{
-			Duration:      10 * time.Minute,
+			Duration:      types.Duration(10 * time.Minute),
 			NumSlices:     5,
 			OrderType:     TWAPOrderTypeMaker,
-			CheckInterval: 1 * time.Second,
+			CheckInterval: types.Duration(1 * time.Second),
 			NumOfTicks:    1,
 		}
 
@@ -207,10 +216,10 @@ func TestTWAPWorker_FillingOrders(t *testing.T) {
 		defer ctrl.Finish()
 
 		config := TWAPWorkerConfig{
-			Duration:      6 * time.Minute,
+			Duration:      types.Duration(6 * time.Minute),
 			NumSlices:     3,
 			OrderType:     TWAPOrderTypeMaker,
-			CheckInterval: 1 * time.Second,
+			CheckInterval: types.Duration(1 * time.Second),
 			NumOfTicks:    1,
 		}
 
@@ -311,10 +320,10 @@ func TestTWAPWorker_OpenThenClose(t *testing.T) {
 		defer ctrl.Finish()
 
 		config := TWAPWorkerConfig{
-			Duration:      4 * time.Minute,
+			Duration:      types.Duration(4 * time.Minute),
 			NumSlices:     2,
 			OrderType:     TWAPOrderTypeMaker,
-			CheckInterval: 1 * time.Second,
+			CheckInterval: types.Duration(1 * time.Second),
 			NumOfTicks:    1,
 		}
 
@@ -434,10 +443,10 @@ func TestTWAPWorker_OpenThenClose(t *testing.T) {
 		defer ctrl.Finish()
 
 		config := TWAPWorkerConfig{
-			Duration:      4 * time.Minute,
+			Duration:      types.Duration(4 * time.Minute),
 			NumSlices:     2,
 			OrderType:     TWAPOrderTypeMaker,
-			CheckInterval: 1 * time.Second,
+			CheckInterval: types.Duration(1 * time.Second),
 			NumOfTicks:    1,
 		}
 
@@ -561,10 +570,10 @@ func TestTWAPWorker_Deadline(t *testing.T) {
 		defer ctrl.Finish()
 
 		config := TWAPWorkerConfig{
-			Duration:      2 * time.Minute,
+			Duration:      types.Duration(2 * time.Minute),
 			NumSlices:     2,
 			OrderType:     TWAPOrderTypeMaker,
-			CheckInterval: 1 * time.Second,
+			CheckInterval: types.Duration(1 * time.Second),
 			NumOfTicks:    1,
 		}
 
@@ -628,10 +637,10 @@ func TestTWAPWorker_Deadline(t *testing.T) {
 		defer ctrl.Finish()
 
 		config := TWAPWorkerConfig{
-			Duration:      2 * time.Minute,
+			Duration:      types.Duration(2 * time.Minute),
 			NumSlices:     2,
 			OrderType:     TWAPOrderTypeMaker,
-			CheckInterval: 1 * time.Second,
+			CheckInterval: types.Duration(1 * time.Second),
 			NumOfTicks:    1,
 		}
 
@@ -709,7 +718,7 @@ func TestTWAPWorker_Misc(t *testing.T) {
 		defer ctrl.Finish()
 
 		config := TWAPWorkerConfig{
-			Duration:     10 * time.Minute,
+			Duration:     types.Duration(10 * time.Minute),
 			NumSlices:    5,
 			OrderType:    TWAPOrderTypeMaker,
 			MaxSliceSize: Number(0.5),
@@ -718,6 +727,7 @@ func TestTWAPWorker_Misc(t *testing.T) {
 
 		worker, _, _, _ := newTestTWAPWorker(t, ctrl, config)
 
+		market := Market("BTCUSDT")
 		startTime := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC)
 		worker.ResetTime(startTime, config.Duration)
 
@@ -725,33 +735,87 @@ func TestTWAPWorker_Misc(t *testing.T) {
 			// remaining = 2.0, time left = 8 min, interval = 2 min, remaining_slices = 4
 			// expected = 2.0 / 4 = 0.5
 			currentTime := startTime.Add(2 * time.Minute)
-			sliceQty := worker.calculateSliceQuantity(currentTime, Number(2.0), false)
+			sliceQty := worker.calculateSliceQuantity(currentTime, Number(2.0), false, market, fixedpoint.Zero)
 			assert.Equal(t, Number(0.5), sliceQty)
 		})
 
 		t.Run("respects max slice size", func(t *testing.T) {
 			// remaining = 5.0, remaining_slices = 5
 			// expected = 5.0 / 5 = 1.0, but max = 0.5
-			sliceQty := worker.calculateSliceQuantity(startTime, Number(5.0), false)
+			sliceQty := worker.calculateSliceQuantity(startTime, Number(5.0), false, market, fixedpoint.Zero)
+			assert.Equal(t, Number(0.5), sliceQty)
+		})
+
+		t.Run("large remaining capped at max slice size", func(t *testing.T) {
+			// remaining = 20.0, time left = 10 min, interval = 2 min, remaining_slices = 5
+			// dynamic slice = 20.0 / 5 = 4.0, but max = 0.5 so it caps at 0.5
+			sliceQty := worker.calculateSliceQuantity(startTime, Number(20.0), false, market, fixedpoint.Zero)
 			assert.Equal(t, Number(0.5), sliceQty)
 		})
 
 		t.Run("respects min slice size", func(t *testing.T) {
 			// remaining = 0.5, remaining_slices = 5
 			// expected = 0.5 / 5 = 0.1
-			sliceQty := worker.calculateSliceQuantity(startTime, Number(0.5), false)
+			sliceQty := worker.calculateSliceQuantity(startTime, Number(0.5), false, market, fixedpoint.Zero)
 			assert.Equal(t, Number(0.1), sliceQty)
 		})
 
 		t.Run("remaining less than min returns remaining", func(t *testing.T) {
 			// remaining = 0.05, which is less than min 0.1
-			sliceQty := worker.calculateSliceQuantity(startTime, Number(0.05), false)
+			sliceQty := worker.calculateSliceQuantity(startTime, Number(0.05), false, market, fixedpoint.Zero)
 			assert.Equal(t, Number(0.05), sliceQty)
 		})
 
 		t.Run("deadline exceeded returns all remaining", func(t *testing.T) {
-			sliceQty := worker.calculateSliceQuantity(startTime, Number(3.0), true)
+			sliceQty := worker.calculateSliceQuantity(startTime, Number(3.0), true, market, fixedpoint.Zero)
 			assert.Equal(t, Number(3.0), sliceQty)
+		})
+
+		t.Run("dust slice re-sliced by minQty", func(t *testing.T) {
+			// BTCUSDT: MinNotional=10, MinQuantity=0.001
+			// Use 20 slices so slice=1.0/20=0.05, notional=5<=10 => dust
+			// Re-slice adds MinQuantity (0.001) until not dust. Since IsDustQuantity
+			// treats notional<=MinNotional as dust, 0.1 (notional=10) is still dust,
+			// so the smallest non-dust quantity is 0.101 (notional=10.1).
+			dustConfig := TWAPWorkerConfig{
+				Duration:  types.Duration(10 * time.Minute),
+				NumSlices: 20,
+				OrderType: TWAPOrderTypeMaker,
+			}
+			dustWorker, _, _, _ := newTestTWAPWorker(t, ctrl, dustConfig)
+			dustWorker.ResetTime(startTime, dustConfig.Duration)
+
+			sliceQty := dustWorker.calculateSliceQuantity(startTime, Number(1.0), false, market, Number(100.0))
+			assert.Equal(t, Number(0.101), sliceQty)
+		})
+
+		t.Run("remaining less than minQty returns remaining", func(t *testing.T) {
+			// remaining=0.05, price=100, notional=5<10 => dust
+			// minQty=0.1, n=floor(0.05/0.1)=0 => return remaining
+			dustConfig := TWAPWorkerConfig{
+				Duration:  types.Duration(10 * time.Minute),
+				NumSlices: 1,
+				OrderType: TWAPOrderTypeMaker,
+			}
+			dustWorker, _, _, _ := newTestTWAPWorker(t, ctrl, dustConfig)
+			dustWorker.ResetTime(startTime, dustConfig.Duration)
+
+			sliceQty := dustWorker.calculateSliceQuantity(startTime, Number(0.05), false, market, Number(100.0))
+			assert.Equal(t, Number(0.05), sliceQty)
+		})
+
+		t.Run("non-dust slice unchanged", func(t *testing.T) {
+			// remaining=2.0, 5 slices, slice=0.4, price=100, notional=40>10 => not dust
+			dustConfig := TWAPWorkerConfig{
+				Duration:  types.Duration(10 * time.Minute),
+				NumSlices: 5,
+				OrderType: TWAPOrderTypeMaker,
+			}
+			dustWorker, _, _, _ := newTestTWAPWorker(t, ctrl, dustConfig)
+			dustWorker.ResetTime(startTime, dustConfig.Duration)
+
+			sliceQty := dustWorker.calculateSliceQuantity(startTime, Number(2.0), false, market, Number(100.0))
+			assert.Equal(t, Number(0.4), sliceQty)
 		})
 	})
 
@@ -760,7 +824,7 @@ func TestTWAPWorker_Misc(t *testing.T) {
 		defer ctrl.Finish()
 
 		config := TWAPWorkerConfig{
-			Duration:  2 * time.Minute,
+			Duration:  types.Duration(2 * time.Minute),
 			NumSlices: 2,
 			OrderType: TWAPOrderTypeMaker,
 		}
@@ -819,7 +883,7 @@ func TestTWAPWorker_Misc(t *testing.T) {
 		defer ctrl.Finish()
 
 		config := TWAPWorkerConfig{
-			Duration:   10 * time.Minute,
+			Duration:   types.Duration(10 * time.Minute),
 			NumSlices:  5,
 			OrderType:  TWAPOrderTypeMaker,
 			NumOfTicks: 1,
@@ -842,46 +906,65 @@ func TestTWAPWorker_Misc(t *testing.T) {
 		})
 
 		t.Run("better buy price triggers update", func(t *testing.T) {
-			worker.syncState.ActiveOrder = &types.Order{
+			worker.activeOrder = &types.Order{
 				OrderID: 1,
 				SubmitOrder: types.SubmitOrder{
-					Side:  types.SideTypeBuy,
-					Price: Number(99.01),
+					Side:     types.SideTypeBuy,
+					Price:    Number(99.51),
+					Quantity: Number(1.0),
 				},
 			}
-			// New best bid is higher, so improved price would be 99.51
-			orderBook := newOrderBook(99.5, 100.0, 100.0, 100.0)
+			// New best bid is lower, so computed price 99.0+0.01=99.01 < 99.51 → better (cheaper)
+			orderBook := newOrderBook(99.0, 100.0, 100.0, 100.0)
 			result := worker.shouldUpdateActiveOrder(orderBook)
 			assert.True(t, result)
 		})
 
 		t.Run("worse buy price does not trigger update", func(t *testing.T) {
-			worker.syncState.ActiveOrder = &types.Order{
+			worker.activeOrder = &types.Order{
 				OrderID: 1,
 				SubmitOrder: types.SubmitOrder{
-					Side:  types.SideTypeBuy,
-					Price: Number(99.51),
+					Side:     types.SideTypeBuy,
+					Price:    Number(99.01),
+					Quantity: Number(1.0),
 				},
 			}
-			// New best bid is lower
-			orderBook := newOrderBook(99.0, 100.0, 100.0, 100.0)
+			// New best bid is higher, computed price 99.5+0.01=99.51 > 99.01 → not better
+			orderBook := newOrderBook(99.5, 100.0, 100.0, 100.0)
 			result := worker.shouldUpdateActiveOrder(orderBook)
 			assert.False(t, result)
 		})
 
 		t.Run("better sell price triggers update", func(t *testing.T) {
 			worker.SetTargetPosition(Number(-1.0))
-			worker.syncState.ActiveOrder = &types.Order{
+			worker.activeOrder = &types.Order{
 				OrderID: 1,
 				SubmitOrder: types.SubmitOrder{
-					Side:  types.SideTypeSell,
-					Price: Number(99.98),
+					Side:     types.SideTypeSell,
+					Price:    Number(99.49),
+					Quantity: Number(1.0),
 				},
 			}
-			// New best ask is lower, so improved price would be 99.49
-			orderBook := newOrderBook(99.0, 100.0, 99.5, 100.0)
+			// New best ask is higher, computed price 100.0-0.01=99.99 > 99.49 → better (more expensive)
+			orderBook := newOrderBook(99.0, 100.0, 100.0, 100.0)
 			result := worker.shouldUpdateActiveOrder(orderBook)
 			assert.True(t, result)
+		})
+
+		t.Run("worse sell price does not trigger update", func(t *testing.T) {
+			worker.SetTargetPosition(Number(-1.0))
+			worker.activeOrder = &types.Order{
+				OrderID: 1,
+				SubmitOrder: types.SubmitOrder{
+					Side:     types.SideTypeSell,
+					Price:    Number(99.99),
+					Quantity: Number(1.0),
+				},
+			}
+			// New best ask is lower, computed price 99.5-0.01=99.49 < 99.99 → not better
+			orderBook := newOrderBook(99.0, 100.0, 99.5, 100.0)
+			result := worker.shouldUpdateActiveOrder(orderBook)
+			assert.False(t, result)
 		})
 	})
 
@@ -890,7 +973,7 @@ func TestTWAPWorker_Misc(t *testing.T) {
 		defer ctrl.Finish()
 
 		config := TWAPWorkerConfig{
-			Duration:   10 * time.Minute,
+			Duration:   types.Duration(10 * time.Minute),
 			NumSlices:  5,
 			OrderType:  TWAPOrderTypeTaker, // Taker orders
 			NumOfTicks: 1,
@@ -906,11 +989,12 @@ func TestTWAPWorker_Misc(t *testing.T) {
 		err := worker.Start(ctx, startTime)
 		assert.NoError(t, err)
 
-		worker.syncState.ActiveOrder = &types.Order{
+		worker.activeOrder = &types.Order{
 			OrderID: 1,
 			SubmitOrder: types.SubmitOrder{
-				Side:  types.SideTypeBuy,
-				Price: Number(100.0),
+				Side:     types.SideTypeBuy,
+				Price:    Number(100.0),
+				Quantity: Number(1.0),
 			},
 		}
 

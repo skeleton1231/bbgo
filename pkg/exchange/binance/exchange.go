@@ -3,6 +3,7 @@ package binance
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -27,6 +28,7 @@ import (
 	"github.com/c9s/bbgo/pkg/fixedpoint"
 	"github.com/c9s/bbgo/pkg/types"
 	"github.com/c9s/bbgo/pkg/util"
+	"github.com/c9s/requestgen"
 )
 
 const BNB = "BNB"
@@ -876,7 +878,7 @@ func (e *Exchange) QuerySpotAccount(ctx context.Context) (*types.Account, error)
 			LongAvailableCredit:  fixedpoint.Zero,
 			ShortAvailableCredit: fixedpoint.Zero,
 			NetAsset:             fixedpoint.Zero,
-			MaxWithdrawAmount:    fixedpoint.Zero,
+			MaxWithdrawAmount:    nil,
 		}
 	}
 
@@ -1694,6 +1696,27 @@ func (e *Exchange) QueryFundingRateHistory(ctx context.Context, symbol string) (
 	return &rate, nil
 }
 
+func (e *Exchange) QueryBnbBurnStatus(ctx context.Context) (bool, error) {
+	if e.IsFutures {
+		req := e.futuresClient2.NewFuturesBnbBurnStatusRequest()
+		resp, err := req.Do(ctx)
+		if err != nil {
+			return false, err
+		}
+
+		return resp.FeeBurn, nil
+	}
+	req := e.client2.NewBnbBurnStatusRequest()
+	resp, err := req.Do(ctx)
+	if err != nil {
+		return false, err
+	}
+	if e.IsMargin || e.IsIsolatedMargin {
+		return resp.InterestBNBBurn, nil
+	}
+	return resp.SpotBNBBurn, nil
+}
+
 // QueryTakerBuySellVolumes queries the taker buy/sell volumes for a symbol and interval. It is only supported for futures.
 func (e *Exchange) QueryTakerBuySellVolumes(ctx context.Context, symbol string, period types.Interval, options types.TradeQueryOptions) ([]binanceapi.FuturesTakerBuySellVolume, error) {
 	req := e.futuresClient2.NewFuturesTakerBuySellVolumeRequest().
@@ -1714,6 +1737,69 @@ func (e *Exchange) QueryTakerBuySellVolumes(ctx context.Context, symbol string, 
 		return nil, err
 	}
 	return takerVol, nil
+}
+
+// SessionOptionConfigurer
+func (e *Exchange) ConfigureOptions(options map[string]any) error {
+	if e.IsFutures {
+		return e.configureFuturesOptions(options)
+	}
+	return e.configureSpotOptions(options)
+}
+
+func (e *Exchange) configureFuturesOptions(options map[string]any) (err error) {
+	futuresBnbBurn, futuresOk := options["futuresBnbBurn"].(bool)
+	if !futuresOk {
+		// nothing to configure for bnb burn
+		return nil
+	}
+	req := e.futuresClient2.NewFuturesToggleBnbBurnRequest(futuresBnbBurn)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	resp, err := req.Do(ctx)
+	defer func() {
+		if err == nil {
+			log.Infof("toggle Futures Burn BNB response: %+v", resp)
+		}
+	}()
+	if err != nil {
+		if err2, ok := err.(*requestgen.ErrResponse); ok {
+			errResp := &Error{}
+			if jsonErr := json.Unmarshal(err2.Response.Body, errResp); jsonErr != nil && errResp.Code == -4145 {
+				// futures BNB burn is already set to the requested value, no need to switch -> ignore the error
+				err = nil
+			}
+		}
+	}
+	return err
+}
+
+func (e *Exchange) configureSpotOptions(options map[string]any) error {
+	spotBnbBurn, spotOk := options["spotBnbBurn"].(bool)
+	interestBnbBurn, interestOk := options["interestBnbBurn"].(bool)
+	if !spotOk && !interestOk {
+		// nothing to configure for bnb burn
+		return nil
+	}
+	req := e.client2.NewToggleBurnBnbRequest()
+	if spotOk {
+		req.SpotBnbBurn(spotBnbBurn)
+	}
+	if interestOk {
+		req.InterestBnbBurn(interestBnbBurn)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	resp, err := req.Do(ctx)
+	if err != nil {
+		return err
+	}
+	log.Infof("toggle Burn BNB response: %+v", resp)
+	return nil
 }
 
 // in seconds

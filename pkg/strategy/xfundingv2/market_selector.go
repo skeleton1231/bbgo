@@ -26,7 +26,7 @@ func getPostionSign(positionType types.PositionType) int {
 type MarketSelectionConfig struct {
 	FuturesDirection types.PositionType `json:"futuresDirection"`
 
-	MaxHoldingHours types.Duration `json:"maxHoldingHours"`
+	MaxHoldingDuration types.Duration `json:"maxHoldingDuration"`
 	// TradeBalanceRatio is the ratio of the asset balance to be invested on the spot market.
 	TradeBalanceRatio fixedpoint.Value `json:"tradeBalanceRatio"`
 
@@ -50,11 +50,11 @@ func (c *MarketSelectionConfig) Defaults() {
 	if c.FuturesDirection == "" {
 		c.FuturesDirection = types.PositionShort
 	}
-	if c.MaxHoldingHours == 0 {
-		c.MaxHoldingHours = types.Duration(time.Hour * 48)
+	if c.MaxHoldingDuration == 0 {
+		c.MaxHoldingDuration = types.Duration(time.Hour * 48)
 	}
 	if c.TradeBalanceRatio.IsZero() {
-		c.TradeBalanceRatio = fixedpoint.NewFromFloat(0.999)
+		c.TradeBalanceRatio = fixedpoint.NewFromFloat(0.8)
 	}
 	if c.MinAnnualizedRate.IsZero() {
 		c.MinAnnualizedRate = fixedpoint.NewFromFloat(0.05) // 5%
@@ -102,6 +102,7 @@ type FuturesInfoService interface {
 	QueryDepth(context.Context, string) (types.SliceOrderBook, int64, error)
 	QueryFuturesFundingInfo(context.Context) ([]binanceapi.FuturesFundingInfo, error)
 	QueryTicker(context.Context, string) (*types.Ticker, error)
+	QueryFuturesAdlRisk(ctx context.Context, symbol string) (map[string]*binanceapi.AdlRisk, error)
 }
 
 // MarketSelector selects the best market based on funding rate and liquidity
@@ -134,7 +135,13 @@ func (s *MarketSelector) SelectMarkets(ctx context.Context, symbols []string) ([
 		return nil, err
 	}
 
-	// Step 3: Filter candidates
+	// Step 3: Get ADL risks
+	adlRisks, err := s.service.QueryFuturesAdlRisk(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+
+	// Step 4: Filter candidates
 	candidates := make([]MarketCandidate, 0, len(indices))
 	// query the volume data
 	takerQuoteVolumes := make(map[string]fixedpoint.Value)
@@ -199,6 +206,12 @@ func (s *MarketSelector) SelectMarkets(ctx context.Context, symbols []string) ([
 			continue
 		}
 		if takerQuoteVol.Compare(s.RequiredTakerQuoteVolume24h) < 0 {
+			continue
+		}
+
+		// if the symbol has no ADL risk found, we assume it's low risk.
+		adlRisk, found := adlRisks[idx.Symbol]
+		if found && adlRisk.RiskLevel != binanceapi.AdlRiskLevelLow {
 			continue
 		}
 

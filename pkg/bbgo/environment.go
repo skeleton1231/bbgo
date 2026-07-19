@@ -536,7 +536,7 @@ func (environ *Environment) BindSync(config *SyncConfig) {
 		}
 	}
 
-	futuresPositionWriterCreator := func(ex types.ExchangeRiskService) func(types.Trade) {
+	futuresPositionWriterCreator := func(ex service.ExchangeFuturesService) func(types.Trade) {
 		return func(trade types.Trade) {
 			if !(trade.IsFutures || trade.IsIsolated) {
 				return
@@ -589,7 +589,7 @@ func (environ *Environment) BindSync(config *SyncConfig) {
 				)
 				continue
 			}
-			if ex, ok := session.Exchange.(types.ExchangeRiskService); ok {
+			if ex, ok := session.Exchange.(service.ExchangeFuturesService); ok {
 				futuresPositionWriter := futuresPositionWriterCreator(ex)
 				session.UserDataStream.OnTradeUpdate(futuresPositionWriter)
 			}
@@ -728,6 +728,16 @@ func (environ *Environment) syncWithUserConfig(ctx context.Context, userConfig *
 		}
 	}
 
+	if err := verifyRecords(
+		ctx,
+		environ.sessions,
+		environ.OrderService,
+		environ.TradeService,
+		userConfig,
+	); err != nil {
+		log.WithError(err).Warn("trade record verification failed")
+	}
+
 	return nil
 }
 
@@ -847,6 +857,10 @@ func (environ *Environment) SyncSession(ctx context.Context, session *ExchangeSe
 func (environ *Environment) syncSession(
 	ctx context.Context, session *ExchangeSession, syncStartTime time.Time, defaultSymbols ...string,
 ) error {
+	if session.IsInMaintenance() {
+		log.Infof("session %s is in maintenance mode, skipping sync", session.Name)
+		return nil
+	}
 	symbols, err := session.getSessionSymbols(defaultSymbols...)
 	if err != nil {
 		return err

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/mock/gomock"
 
@@ -92,12 +93,21 @@ func TestStrategy_AquireFeeAssetAndTransfer(t *testing.T) {
 		})
 		feeExecutor := bbgo.NewGeneralOrderExecutor(spotSession, "BNBUSDT", "xfundingv2", "test", position)
 
+		spotOrderBooks := map[string]*types.StreamOrderBook{
+			"BNBUSDT": newStreamOrderBookWithData("BNBUSDT",
+				types.PriceVolumeSlice{{Price: Number(600), Volume: Number(100)}},
+				types.PriceVolumeSlice{{Price: Number(601), Volume: Number(100)}},
+			),
+		}
+
 		s := &Strategy{
 			FeeSymbol:                 "BNBUSDT",
 			spotSession:               spotSession,
 			futuresSession:            futuresSession,
 			futuresService:            mockService,
 			spotGeneralOrderExecutors: map[string]*bbgo.GeneralOrderExecutor{"BNBUSDT": feeExecutor},
+			spotOrderBooks:            spotOrderBooks,
+			logger:                    logrus.StandardLogger(),
 		}
 
 		return s, mockExchange, mockService
@@ -129,8 +139,8 @@ func TestStrategy_AquireFeeAssetAndTransfer(t *testing.T) {
 		// Spot needs 1.0 BNB, has 0.2 BNB; Futures needs 0.8 BNB, has 0.1 BNB
 		// spotDeficit = 1.0 - 0.2 = 0.8, futuresDeficit = 0.8 - 0.1 = 0.7
 		// total deficit = 0.8 + 0.7 = 1.5 > 0 → buy 1.5, transfer max(0, 0.7) = 0.7 to futures
-		s, mockExchange, mockService := setup(Number(0.2), Number(0.1))
-		rounds := makeRounds(Number(1.0), Number(0.8))
+		s, mockExchange, mockService := setup(Number("0.2"), Number("0.1"))
+		rounds := makeRounds(Number("1.0"), Number("0.8"))
 
 		mockExchange.EXPECT().
 			SubmitOrder(gomock.Any(), gomock.Any()).
@@ -327,7 +337,7 @@ func TestStrategy_CalculateRoundFeeAsset(t *testing.T) {
 
 		nextFundingTime := time.Date(2024, 1, 1, 8, 0, 0, 0, time.UTC)
 		config := TWAPWorkerConfig{
-			Duration:  10 * time.Minute,
+			Duration:  types.Duration(10 * time.Minute),
 			NumSlices: 5,
 		}
 		spotWorker, _, _, _ := newTestTWAPWorker(t, ctrl, config)
@@ -344,8 +354,9 @@ func TestStrategy_CalculateRoundFeeAsset(t *testing.T) {
 		round := NewArbitrageRound(
 			fundingRate,
 			types.ExchangeBinance, types.ExchangeBinance,
-			3, 8,
-			spotWorker, futuresWorker, mockService)
+			3, 8, Number(3),
+			spotWorker, futuresWorker, mockService,
+			types.PositionLong, time.Minute)
 
 		err := s.calculateRoundFeeAsset(round)
 		assert.EqualError(t, err, "order book data is not ready yet")
@@ -444,7 +455,7 @@ func TestStrategy_CalculateRoundFeeAsset(t *testing.T) {
 
 		nextFundingTime := time.Date(2024, 1, 1, 8, 0, 0, 0, time.UTC)
 		config := TWAPWorkerConfig{
-			Duration:  10 * time.Minute,
+			Duration:  types.Duration(10 * time.Minute),
 			NumSlices: 5,
 		}
 		spotWorker, _, _, _ := newTestTWAPWorker(t, ctrl, config)
@@ -461,7 +472,8 @@ func TestStrategy_CalculateRoundFeeAsset(t *testing.T) {
 		round := NewArbitrageRound(
 			fundingRate,
 			types.ExchangeBinance, types.ExchangeBinance,
-			3, 8, spotWorker, futuresWorker, mockService)
+			3, 8, Number(3), spotWorker, futuresWorker, mockService,
+			types.PositionShort, time.Minute)
 
 		err := s.calculateRoundFeeAsset(round)
 		assert.NoError(t, err)

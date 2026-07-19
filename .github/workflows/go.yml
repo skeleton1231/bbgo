@@ -29,12 +29,12 @@ jobs:
 
     steps:
 
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         # lfs: 'true'
         ssh-key: ${{ secrets.git_ssh_key }}
 
-    - uses: actions/cache@v5
+    - uses: actions/cache@v6
       with:
         path: |
           ~/.cache/go-build
@@ -90,13 +90,13 @@ jobs:
         sed -i -e '/_requestgen.go/d' coverage_dnum.txt
 
     - name: Revive Check
-      uses: morphy2k/revive-action@v2.7.7 # https://github.com/mgechev/revive/issues/956
+      uses: morphy2k/revive-action@v2.7.8 # https://github.com/mgechev/revive/issues/956
       with:
         reporter: github-pr-review
         fail_on_error: true
 
     - name: Upload Coverage Report
-      uses: codecov/codecov-action@v6
+      uses: codecov/codecov-action@v7
       with:
         files: ./coverage.txt,./coverage_dnum.txt
 

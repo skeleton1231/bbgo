@@ -46,6 +46,8 @@ const (
 	// @group RiskDataStream
 	EventTypeMarginLevelStatusChange EventType = "MARGIN_LEVEL_STATUS_CHANGE"
 	EventTypeUserLiabilityChange     EventType = "USER_LIABILITY_CHANGE"
+
+	EventServerShutdown EventType = "serverShutdown"
 )
 
 type EventBase struct {
@@ -142,7 +144,7 @@ type ExecutionReportEvent struct {
 	SelfTradePreventionMode *string `json:"V"`
 }
 
-func (e *ExecutionReportEvent) Order() (*types.Order, error) {
+func (e *ExecutionReportEvent) Order(isMargin, isIsolated bool) (*types.Order, error) {
 	switch e.CurrentExecutionType {
 	case "NEW", "CANCELED", "REJECTED", "EXPIRED":
 	case "REPLACED":
@@ -172,10 +174,12 @@ func (e *ExecutionReportEvent) Order() (*types.Order, error) {
 		ExecutedQuantity: e.CumulativeFilledQuantity,
 		CreationTime:     types.Time(orderCreationTime),
 		UpdateTime:       types.Time(orderCreationTime),
+		IsMargin:         isMargin,
+		IsIsolated:       isIsolated,
 	}, nil
 }
 
-func (e *ExecutionReportEvent) Trade() (*types.Trade, error) {
+func (e *ExecutionReportEvent) Trade(isMargin, isIsolated bool) (*types.Trade, error) {
 	if e.CurrentExecutionType != "TRADE" {
 		return nil, errors.New("execution report is not a trade")
 	}
@@ -195,6 +199,8 @@ func (e *ExecutionReportEvent) Trade() (*types.Trade, error) {
 		Time:          types.Time(tt),
 		Fee:           e.CommissionAmount,
 		FeeCurrency:   e.CommissionAsset,
+		IsMargin:      isMargin,
+		IsIsolated:    isIsolated,
 	}, nil
 }
 
@@ -449,6 +455,10 @@ func parseWebSocketEvent(message []byte) (interface{}, error) {
 		var event ForceOrderEvent
 		err = json.Unmarshal(message, &event)
 		return &event, err
+	case EventServerShutdown:
+		var event ServerShutdownEvent
+		err = json.Unmarshal(message, &event)
+		return &event, err
 	}
 
 	// events for futures
@@ -463,6 +473,11 @@ func parseWebSocketEvent(message []byte) (interface{}, error) {
 
 	case "markPriceUpdate":
 		var event MarkPriceUpdateEvent
+		err = json.Unmarshal([]byte(message), &event)
+		return &event, err
+
+	case "indexPrice_kline":
+		var event IndexPriceKLineEvent
 		err = json.Unmarshal([]byte(message), &event)
 		return &event, err
 
@@ -503,15 +518,21 @@ func parseWebSocketEvent(message []byte) (interface{}, error) {
 	default:
 		id := val.GetInt("id")
 		if id > 0 {
-			var event ResultEvent
-			if err2 := json.Unmarshal(message, &event); err2 != nil {
-				return nil, fmt.Errorf("failed to unmarshal response message: %w, message: %s", err2, message)
-			}
-			return &event, nil
+			return &ResultEvent{ID: id}, nil
 		}
 	}
 
 	return nil, fmt.Errorf("unsupported binance websocket message: %s", message)
+}
+
+//	{
+//	  "event": {
+//	    "e": "serverShutdown", // Event Type
+//	    "E": 1770123456789     // Event Time
+//	  }
+//	}
+type ServerShutdownEvent struct {
+	EventBase
 }
 
 // isBookTicker document ref :https://binance-docs.github.io/apidocs/spot/en/#individual-symbol-book-ticker-streams
@@ -961,6 +982,39 @@ type ContinuousKLineEvent struct {
 }
 */
 
+type IndexPriceKLineEvent struct {
+	EventBase
+	Symbol string `json:"ps"`
+	KLine  KLine  `json:"k,omitempty"`
+}
+
+/*
+{
+  "e":"indexPrice_kline",   // Event type
+  "E":1591267070033,        // Event time
+  "ps":"BTCUSD",            // Pair
+  "k":{
+    "t":1591267020000,      // Kline start time
+    "T":1591267079999,      // Kline close time
+    "s":"0",                // Ignore, placeholder for kline symbol
+    "i":"1m",               // Interval
+    "f":1591267020000,      // First updated time
+    "L":1591267070000,      // Last updated time
+    "o":"9542.21900000",    // Open price
+    "c":"9542.50440000",    // Close price
+    "h":"9542.71640000",    // High price
+    "l":"9542.21040000",    // Low price
+    "v":"0",                // Ignore
+    "n": 51,                // Ignore
+    "x":false,              // Is this kline closed?
+    "q":"0",                // Ignore
+    "V":"0",                // Ignore
+    "Q":"0",                // Ignore
+    "B":"0"                 // Ignore
+  }
+}
+*/
+
 // Similar to the ExecutionReportEvent's fields. But with totally different json key.
 // e.g., Stop price. So that, we can not merge them.
 type OrderTrade struct {
@@ -1049,7 +1103,7 @@ type OrderTradeUpdateEvent struct {
 
 //   }
 
-func (e *OrderTradeUpdateEvent) OrderFutures() (*types.Order, error) {
+func (e *OrderTradeUpdateEvent) OrderFutures(isIsolated bool) (*types.Order, error) {
 
 	switch e.OrderTrade.CurrentExecutionType {
 	case "NEW", "CANCELED", "EXPIRED":
@@ -1077,10 +1131,11 @@ func (e *OrderTradeUpdateEvent) OrderFutures() (*types.Order, error) {
 		CreationTime:     types.Time(e.OrderTrade.OrderTradeTime.Time()), // FIXME: find the correct field for creation time
 		UpdateTime:       types.Time(e.OrderTrade.OrderTradeTime.Time()),
 		IsFutures:        true,
+		IsIsolated:       isIsolated,
 	}, nil
 }
 
-func (e *OrderTradeUpdateEvent) TradeFutures() (*types.Trade, error) {
+func (e *OrderTradeUpdateEvent) TradeFutures(isIsolated bool) (*types.Trade, error) {
 	if e.OrderTrade.CurrentExecutionType != "TRADE" {
 		return nil, errors.New("execution report is not a futures trade")
 	}
@@ -1100,6 +1155,7 @@ func (e *OrderTradeUpdateEvent) TradeFutures() (*types.Trade, error) {
 		Fee:           e.OrderTrade.CommissionAmount,
 		FeeCurrency:   e.OrderTrade.CommissionAsset,
 		IsFutures:     true,
+		IsIsolated:    isIsolated,
 	}, nil
 }
 
@@ -1349,7 +1405,7 @@ type AlgoOrder struct {
 	FailedReason     string           `json:"rm"`
 }
 
-func (e *AlgoOrderUpdateEvent) OrderFutures() (*types.Order, error) {
+func (e *AlgoOrderUpdateEvent) OrderFutures(isFutures, isMargin, isIsolated bool) (*types.Order, error) {
 	switch e.AlgoOrder.Status {
 	case "NEW", "CANCELED", "EXPIRED", "REJECTED", "TRIGGERING", "TRIGGERED", "FINISHED":
 	default:
@@ -1378,5 +1434,8 @@ func (e *AlgoOrderUpdateEvent) OrderFutures() (*types.Order, error) {
 		Status:           toGlobalFuturesOrderStatus(futures.OrderStatusType(e.AlgoOrder.Status)),
 		ExecutedQuantity: e.AlgoOrder.ExecutedQuantity,
 		UpdateTime:       types.Time(e.TransactionTime.Time()),
+		IsFutures:        isFutures,
+		IsMargin:         isMargin,
+		IsIsolated:       isIsolated,
 	}, nil
 }

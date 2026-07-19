@@ -107,7 +107,7 @@ func (s *TradeService) Sync(
 	tasks := []SyncTask{
 		{
 			Type:   types.Trade{},
-			Select: SelectLastTrades(s.DB.DriverName(), exchange.Name(), symbol, isMargin, isFutures, isIsolated, 100),
+			Select: SelectLastTrades(exchange.Name(), symbol, isMargin, isFutures, isIsolated, 100),
 			OnLoad: func(objs interface{}) {
 				// update last trade ID
 				trades := objs.([]types.Trade)
@@ -689,9 +689,27 @@ func (s *TradeService) DeleteAll() error {
 	return err
 }
 
-func SelectLastTrades(driver string, ex types.ExchangeName, symbol string, isMargin, isFutures, isIsolated bool, limit uint64) sq.SelectBuilder {
-	cols := genTradeSelectColumns(driver)
-	return sq.Select(cols...).
+func (s *TradeService) DeleteByGID(ctx context.Context, gids []int64) error {
+	if len(gids) == 0 {
+		return nil
+	}
+
+	const batchSize = 100
+	for i := 0; i < len(gids); i += batchSize {
+		end := min(i+batchSize, len(gids))
+		sql, args, err := sq.Delete("trades").Where(sq.Eq{"gid": gids[i:end]}).ToSql()
+		if err != nil {
+			return err
+		}
+		if _, err := s.DB.ExecContext(ctx, sql, args...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func SelectLastTrades(ex types.ExchangeName, symbol string, isMargin, isFutures, isIsolated bool, limit uint64) sq.SelectBuilder {
+	return sq.Select("*").
 		From("trades").
 		Where(sq.And{
 			sq.Eq{"symbol": symbol},

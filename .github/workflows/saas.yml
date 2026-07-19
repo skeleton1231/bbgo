@@ -1,0 +1,137 @@
+name: SaaS CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'saas/manager/**'
+      - 'saas/web/**'
+      - 'saas/docker/**'
+      - 'saas/scripts/**'
+      - 'pkg/instanceid/**'
+      - '.github/workflows/saas.yml'
+  pull_request:
+    paths:
+      - 'saas/manager/**'
+      - 'saas/web/**'
+      - 'saas/docker/**'
+      - 'saas/scripts/**'
+
+jobs:
+  manager:
+    name: Manager build + test + vet
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: saas/manager
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache-dependency-path: saas/manager/go.sum
+      - name: Download bbgo deps
+        working-directory: .
+        run: go mod download
+      - name: go mod download
+        run: go mod download
+      - name: Build
+        run: go build -trimpath -ldflags "-s -w -X main.BuildVersion=ci" ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Test (race + coverage)
+        run: go test -race -count=1 -coverprofile=coverage.out ./...
+      - name: govulncheck
+        uses: golang/govulncheck-action@v1
+        with:
+          go-source-dir: saas/manager
+          work-dir: saas/manager
+
+  web:
+    name: Web build + lint + test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: saas/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: saas/web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm check
+      - run: pnpm test
+      - name: Production build smoke (Next standalone)
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://stub.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: stub-anon-key
+        run: pnpm build
+
+  docker-images:
+    name: Docker images build
+    runs-on: ubuntu-latest
+    needs: [manager, web]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build bbgo-base
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: saas/docker/Dockerfile.bbgo-base
+          tags: bbgo-base:ci
+          push: false
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Build manager
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: saas/docker/Dockerfile.manager
+          tags: bbgo-manager:ci
+          push: false
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Build web
+        uses: docker/build-push-action@v6
+        with:
+          context: saas/web
+          file: saas/web/Dockerfile
+          tags: bbgo-web:ci
+          push: false
+          load: true
+          build-args: |
+            NEXT_PUBLIC_SUPABASE_URL=https://stub.supabase.co
+            NEXT_PUBLIC_SUPABASE_ANON_KEY=stub-anon-key
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  compose-validate:
+    name: docker compose config validation
+    runs-on: ubuntu-latest
+    needs: [docker-images]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate production compose
+        env:
+          DOMAIN: stub.example
+          ACME_EMAIL: stub@example.com
+          SUPABASE_URL: https://stub.supabase.co
+          SUPABASE_SERVICE_KEY: stub
+          SUPABASE_DB_URL: postgresql://stub
+          NEXT_PUBLIC_SUPABASE_URL: https://stub.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: stub
+          SUPABASE_SERVICE_ROLE_KEY: stub
+          ENCRYPTION_KEY: stub
+          MANAGER_TOKEN: stub
+          BINANCE_API_KEY: stub
+          BINANCE_API_SECRET: stub
+        run: docker compose -f saas/docker/docker-compose.prod.yml config -q

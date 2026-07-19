@@ -96,6 +96,10 @@ type Exchange interface {
 	ExchangeTradeService
 }
 
+type SessionOptionConfigurer interface {
+	ConfigureOptions(map[string]any) error
+}
+
 //go:generate mockgen -destination=mocks/mock_exchange_extended.go -package=mocks . ExchangeExtended
 type ExchangeExtended interface {
 	Exchange
@@ -201,6 +205,10 @@ type ExchangeRewardService interface {
 type ExchangeRiskService interface {
 	SetLeverage(ctx context.Context, symbol string, leverage int) error
 	QueryPositionRisk(ctx context.Context, symbol ...string) ([]PositionRisk, error)
+}
+
+type ExchangeFundingFeeService interface {
+	QueryFundingFeeHistory(ctx context.Context, symbol string, startTime, endTime *time.Time) ([]FundingFee, error)
 }
 
 // TradeQueryOptions defines the parameters for querying historical trades from exchanges.

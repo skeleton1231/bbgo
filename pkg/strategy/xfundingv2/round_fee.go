@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/c9s/bbgo/pkg/bbgo"
+	"github.com/c9s/bbgo/pkg/exchange/retry"
 	"github.com/c9s/bbgo/pkg/fixedpoint"
 	"github.com/c9s/bbgo/pkg/types"
 )
@@ -19,10 +20,10 @@ type PendingRound struct {
 
 func (s *Strategy) processPendingRounds(ctx context.Context, currentTime time.Time) {
 	var pendingRounds []*PendingRound
-	for _, pendingRound := range s.pendingRounds {
+	for _, pendingRound := range s.PendingRounds {
 		// moving round out from the pending list
 		if pendingRound.RetryCount >= s.MaxPendingRoundRetry {
-			delete(s.pendingRounds, pendingRound.Round.SpotSymbol())
+			delete(s.PendingRounds, pendingRound.Round.SpotSymbol())
 			continue
 		}
 		// the pending round is over the grace period, it is ready for another retry
@@ -48,10 +49,7 @@ func (s *Strategy) processPendingRounds(ctx context.Context, currentTime time.Ti
 			processedRounds = append(processedRounds, pendingRound)
 			allRounds = append(allRounds, pendingRound.Round)
 		}
-		// include the active rounds into fee asset preparation
-		for _, activeRound := range s.activeRounds {
-			allRounds = append(allRounds, activeRound)
-		}
+
 		if err := s.acquireFeeAssetAndTransfer(ctx, allRounds); err != nil {
 			s.logger.WithError(err).Error("failed to acquire fee asset and transfer for pending rounds")
 			for _, pendingRound := range pendingRounds {
@@ -59,6 +57,14 @@ func (s *Strategy) processPendingRounds(ctx context.Context, currentTime time.Ti
 				pendingRound.LastRetryTime = currentTime
 			}
 			return
+		}
+		// We set fee average cost after acquiring fee asset and transferring.
+		// Because the fee average cost may change after the fee asset acquisition.
+		if feePosition, ok := s.SpotPositions[s.FeeSymbol]; ok {
+			for _, round := range allRounds {
+				feeAvgCost := feePosition.AverageCost
+				round.SetAvgFeeCost(s.FeeSymbol, feeAvgCost)
+			}
 		}
 	} else {
 		// fee asset is not required, adding all pending rounds to the next step
@@ -70,7 +76,11 @@ func (s *Strategy) processPendingRounds(ctx context.Context, currentTime time.Ti
 	// start the processed rounds and move them to active round list
 	for _, pendingRound := range processedRounds {
 		round := pendingRound.Round
-		if err := round.Start(ctx, currentTime); err != nil {
+		if err := round.Start(
+			ctx,
+			s.spotSession,
+			s.futuresSession,
+			currentTime); err != nil {
 			s.logger.WithError(err).Errorf(
 				"failed to start round after fee asset preparation: %s",
 				round,
@@ -80,13 +90,30 @@ func (s *Strategy) processPendingRounds(ctx context.Context, currentTime time.Ti
 			continue
 		}
 		// move to active round list
-		s.activeRounds[round.SpotSymbol()] = round
-		delete(s.pendingRounds, round.SpotSymbol())
-		bbgo.Notify("🚀 Round started: %s", round.SpotSymbol(), round.NewNotification())
+		s.ActiveRounds[round.SpotSymbol()] = round
+		delete(s.PendingRounds, round.SpotSymbol())
+		spotOrderBook, futuresOrderBook, _ := s.getOrderBooks(
+			round.SpotSymbol(),
+			round.FuturesSymbol(),
+		)
+		bbgo.Notify("🚀 Round started: %s", round.SpotSymbol(),
+			round.NewNotification(
+				spotOrderBook, futuresOrderBook,
+			),
+		)
 	}
 }
 
 func (s *Strategy) acquireFeeAssetAndTransfer(ctx context.Context, rounds []*ArbitrageRound) error {
+	if s.DryRun {
+		if len(rounds) > 0 {
+			s.logger.Infof(
+				"[acquireFeeAssetAndTransfer] dry run mode, would have acquired fee asset and transfer: %+v",
+				rounds,
+			)
+		}
+		return nil
+	}
 	var requiredSpotFeeAmount, requiredFuturesFeeAmount fixedpoint.Value
 	for _, round := range rounds {
 		roundSpotFee, roundFuturesFee := round.RequiredFeeAssetAmounts()
@@ -124,17 +151,47 @@ func (s *Strategy) acquireFeeAssetAndTransfer(ctx context.Context, rounds []*Arb
 		}
 	}
 	if !buyQuantity.IsZero() {
-		orderExecutor, found := s.spotGeneralOrderExecutors[s.FeeSymbol]
-		if !found {
-			return fmt.Errorf("no order executor found for fee symbol %s", s.FeeSymbol)
+		orderBook := s.spotOrderBooks[s.FeeSymbol]
+		bestAsk, ok := orderBook.BestAsk()
+		if !ok {
+			return fmt.Errorf("no ask price available for %s", s.FeeSymbol)
 		}
-		if _, err := orderExecutor.SubmitOrders(ctx, types.SubmitOrder{
+		bestAskPrice := bestAsk.Price
+		buyQuantity = fixedpoint.Max(buyQuantity, market.MinNotional.Div(bestAskPrice))
+		buyQuantity = market.TruncateQuantity(buyQuantity)
+		orderForm := types.SubmitOrder{
 			Symbol:   s.FeeSymbol,
 			Side:     types.SideTypeBuy,
 			Type:     types.OrderTypeMarket,
 			Quantity: buyQuantity,
-		}); err != nil {
+		}
+		if market.IsDustQuantity(buyQuantity, bestAskPrice) {
+			orderForm.Quantity = market.MinNotional.Mul(fixedpoint.NewFromFloat(1.05)).Div(bestAskPrice)
+		}
+		orderExecutor, found := s.spotGeneralOrderExecutors[s.FeeSymbol]
+		if !found {
+			return fmt.Errorf("no order executor found for fee symbol %s", s.FeeSymbol)
+		}
+		s.logger.Debugf("fee order form: %+v", orderForm)
+		if createdOrders, err := orderExecutor.SubmitOrders(ctx, orderForm); err != nil {
 			return fmt.Errorf("failed to buy fee asset for pending rounds: %w", err)
+		} else {
+			timedCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			defer cancel()
+
+			createdOrder := createdOrders[0]
+			s.logger.Debugf("fee order created: %+v", createdOrder)
+			if service, ok := s.spotSession.Exchange.(types.ExchangeOrderQueryService); ok {
+				_, err := retry.QueryOrderUntilFilled(timedCtx, service, createdOrder.AsQuery())
+				if err != nil {
+					return fmt.Errorf("failed to wait for fee order to be filled: %w", err)
+				}
+			} else {
+				// simple hack to wait for the market order to be filled
+				if !bbgo.IsBackTesting {
+					time.Sleep(5 * time.Second)
+				}
+			}
 		}
 	}
 	if !transferAmount.IsZero() {
