@@ -69,7 +69,7 @@ func (m Market) IsDustQuantity(quantity, price fixedpoint.Value) bool {
 		quantity = quantity.Abs()
 	}
 
-	return quantity.Compare(m.MinQuantity) < 0 || quantity.Mul(price).Compare(m.MinNotional) < 0
+	return quantity.Compare(m.MinQuantity) <= 0 || quantity.Mul(price).Compare(m.MinNotional) <= 0
 }
 
 // TruncateQuantity uses the step size to truncate floating number, in order to avoid the rounding issue
