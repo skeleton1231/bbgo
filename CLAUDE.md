@@ -84,6 +84,10 @@ Two sub-packages provide reusable test utilities:
 - `Recorder` — records live HTTP interactions, saves to JSON, replays later via `MockTransport.LoadFromRecorder()`. Automatically strips credential headers. Control with `TEST_HTTP_RECORD=1` env var.
 - `BuildResponseJson(code, payload)` / `SetHeader(resp, k, v)` — chainable response builders
 
+### Paper-mode strategy gate (`pkg/cmd/strategy/paper_smoke_test.go`)
+
+`TestPaperSmoke_AllStrategies_RunWithoutPanic` is the **runtime** counterpart to `registry_lifecycle_test.go`. For every registered single-exchange strategy it wires the strategy to a paper-backed `ExchangeSession`, runs `Defaults` → `Initialize` → `Subscribe` → `Run`, feeds 220 deterministic synthetic klines through a controllable `StandardStream` (which drives both the strategy callbacks and the paper matching engine), and asserts no panic, no hang, clean ctx-cancel exit, and **no negative balance**. Coverage is a **denylist** (`paperSmokeSkip`) — a new strategy is covered by default; adding a skip requires a concrete reason and is Phase 2/3 backlog. Run with `go test ./pkg/cmd/strategy/ -run TestPaperSmoke -timeout 600s`. See `saas/docs/paper-strategy-audit.md` for the strategy-by-strategy status matrix and the skip backlog.
+
 ## Linting
 
 CI uses **revive** for linting and **golangci-lint** with: staticcheck, bodyclose, contextcheck, dupword, decorder, goconst, govet, gosec, misspell. Format with `gofmt -s -w`.

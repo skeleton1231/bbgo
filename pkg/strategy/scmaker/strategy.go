@@ -188,6 +188,11 @@ func (s *Strategy) preloadKLines(
 }
 
 func (s *Strategy) initializeMidPriceEMA(session *bbgo.ExchangeSession) {
+	// MidPriceEMA is optional (Subscribe already nil-checks it). Without this
+	// guard, an unconfigured scmaker nil-derefs here on Run.
+	if s.MidPriceEMA == nil {
+		return
+	}
 	kLines := KLines(session.MarketDataStream, s.Symbol, s.MidPriceEMA.Interval)
 	s.ewma = EWMA2(ClosePrices(kLines), s.MidPriceEMA.Window)
 
@@ -202,6 +207,11 @@ func (s *Strategy) initializeIntensityIndicator(session *bbgo.ExchangeSession) {
 }
 
 func (s *Strategy) initializePriceRangeBollinger(session *bbgo.ExchangeSession) {
+	// PriceRangeBollinger is optional. Without this guard, an unconfigured
+	// scmaker nil-derefs here on Run.
+	if s.PriceRangeBollinger == nil {
+		return
+	}
 	kLines := KLines(session.MarketDataStream, s.Symbol, s.PriceRangeBollinger.Interval)
 	closePrices := ClosePrices(kLines)
 	s.boll = BOLL(closePrices, s.PriceRangeBollinger.Window, s.PriceRangeBollinger.K)
