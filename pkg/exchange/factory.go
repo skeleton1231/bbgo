@@ -154,7 +154,7 @@ func DefaultEnvVarLoader(varPrefix string) (Options, error) {
 	secret := os.Getenv(varPrefix + "_API_SECRET")
 	if len(key) == 0 || len(secret) == 0 {
 		if os.Getenv("PAPER_TRADE") == "1" {
-			log.Infof("paper trade mode: skipping exchange credentials for prefix %%s", varPrefix)
+			log.Infof("paper trade mode: skipping exchange credentials for prefix %s", varPrefix)
 			return Options{}, nil
 		}
 		return nil, fmt.Errorf("can not initialize exchange due to empty key or secret, env var prefix: %s", varPrefix)
